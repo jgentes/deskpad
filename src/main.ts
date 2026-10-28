@@ -21,16 +21,25 @@ interface Meeting {
 
 interface Settings {
   ics_url: string;
+  google_client_id: string;
+  google_client_secret: string;
   always_on_top: boolean;
   reserve_space: boolean;
+  autostart: boolean;
   width: number;
   lookahead_hours: number;
+}
+
+interface MeetingsResult {
+  source: "google" | "ics" | "none";
+  meetings: Meeting[];
 }
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
 let settings: Settings;
 let meetings: Meeting[] = [];
+let googleConnected = false;
 
 // ---------- clock ----------
 
@@ -79,11 +88,19 @@ function linkify(loc: string): string {
   return esc.replace(/https?:\/\/\S+/g, (u) => `<a href="${u}" data-ext>${u.replace(/^https?:\/\//, "")}</a>`);
 }
 
+function joinLabel(url: string): string {
+  if (/meet\.google\.com/.test(url)) return "Join Meet";
+  if (/zoom\.us/.test(url)) return "Join Zoom";
+  if (/teams\.microsoft\.com|teams\.live\.com/.test(url)) return "Join Teams";
+  if (/calendar\.google\.com/.test(url)) return "Open in Calendar";
+  return "Join";
+}
+
 function renderMeetings() {
   const el = $("#meetings");
   const now = Math.floor(Date.now() / 1000);
-  if (!settings?.ics_url) {
-    el.innerHTML = `<div class="empty">No calendar connected. <a id="link-settings">Add an .ics feed</a> to see upcoming meetings.</div>`;
+  if (!settings?.ics_url && !googleConnected) {
+    el.innerHTML = `<div class="empty">No calendar connected. <a id="link-settings">Connect Google Calendar or an .ics feed</a> to see upcoming meetings.</div>`;
     el.querySelector("#link-settings")?.addEventListener("click", openSettings);
     return;
   }
@@ -110,7 +127,8 @@ function renderMeetings() {
     card.innerHTML = `
       <div class="m-time"><span>${when}</span><span class="m-rel">${rel.label}</span></div>
       <div class="m-title" title="${m.title.replace(/"/g, "&quot;")}"></div>
-      ${m.location ? `<div class="m-loc">${linkify(m.location)}</div>` : ""}
+      ${m.location && !m.location.startsWith("http") ? `<div class="m-loc">${linkify(m.location)}</div>` : ""}
+      ${m.url ? `<a class="m-join" href="${m.url.replace(/"/g, "&quot;")}" data-ext>${joinLabel(m.url)}</a>` : ""}
     `;
     card.querySelector(".m-title")!.textContent = m.title;
     frag.appendChild(card);
@@ -125,7 +143,7 @@ function renderMeetings() {
 }
 
 async function loadMeetings(force = false) {
-  if (!settings?.ics_url) {
+  if (!settings?.ics_url && !googleConnected) {
     meetings = [];
     renderMeetings();
     return;
@@ -133,7 +151,9 @@ async function loadMeetings(force = false) {
   const btn = $("#btn-refresh");
   btn.classList.add("spin");
   try {
-    meetings = await invoke<Meeting[]>("get_meetings", { force });
+    const result = await invoke<MeetingsResult>("get_meetings", { force });
+    meetings = result.meetings;
+    $("#meetings-panel h2").textContent = result.source === "google" ? "Up next · Google" : "Up next";
     renderMeetings();
   } catch (err) {
     $("#meetings").innerHTML = `<div class="error">Couldn't load calendar: ${String(err)}</div>`;
@@ -201,28 +221,83 @@ function editTask(row: HTMLElement, textEl: HTMLElement, t: Task) {
 
 // ---------- settings ----------
 
+function renderGoogleState() {
+  $("#google-connected").classList.toggle("hidden", !googleConnected);
+  $("#google-disconnected").classList.toggle("hidden", googleConnected);
+}
+
 function openSettings() {
   $<HTMLInputElement>("#s-ics").value = settings.ics_url;
+  $<HTMLInputElement>("#s-gid").value = settings.google_client_id;
+  $<HTMLInputElement>("#s-gsecret").value = settings.google_client_secret;
   $<HTMLInputElement>("#s-lookahead").value = String(settings.lookahead_hours);
   $<HTMLInputElement>("#s-width").value = String(settings.width);
   $<HTMLInputElement>("#s-reserve").checked = settings.reserve_space;
   $<HTMLInputElement>("#s-top").checked = settings.always_on_top;
+  $<HTMLInputElement>("#s-autostart").checked = settings.autostart;
+  $("#google-error").textContent = "";
+  renderGoogleState();
   $("#settings").classList.remove("hidden");
-  $<HTMLInputElement>("#s-ics").focus();
 }
 
-async function saveSettings(e: Event) {
-  e.preventDefault();
-  const next: Settings = {
+function readSettingsForm(): Settings {
+  return {
     ics_url: $<HTMLInputElement>("#s-ics").value.trim(),
+    google_client_id: $<HTMLInputElement>("#s-gid").value.trim(),
+    google_client_secret: $<HTMLInputElement>("#s-gsecret").value.trim(),
     lookahead_hours: Math.max(1, Number($<HTMLInputElement>("#s-lookahead").value) || 36),
     width: Math.min(600, Math.max(240, Number($<HTMLInputElement>("#s-width").value) || 340)),
     reserve_space: $<HTMLInputElement>("#s-reserve").checked,
     always_on_top: $<HTMLInputElement>("#s-top").checked,
+    autostart: $<HTMLInputElement>("#s-autostart").checked,
   };
-  await invoke("set_settings", { settings: next });
+}
+
+async function saveSettings(e: Event) {
+  e.preventDefault();
+  const next = readSettingsForm();
+  try {
+    await invoke("set_settings", { settings: next });
+  } catch (err) {
+    $("#google-error").textContent = String(err);
+    return;
+  }
   settings = next;
   $("#settings").classList.add("hidden");
+  loadMeetings(true);
+}
+
+async function connectGoogle() {
+  const btn = $<HTMLButtonElement>("#btn-google-connect");
+  const errEl = $("#google-error");
+  errEl.textContent = "";
+  // Persist the client credentials first so the backend can use them.
+  const next = readSettingsForm();
+  if (!next.google_client_id) {
+    errEl.textContent = "Enter the OAuth client ID first.";
+    return;
+  }
+  await invoke("set_settings", { settings: next });
+  settings = next;
+  btn.disabled = true;
+  btn.textContent = "Waiting for sign-in in your browser…";
+  try {
+    await invoke("google_connect");
+    googleConnected = true;
+    renderGoogleState();
+    loadMeetings(true);
+  } catch (err) {
+    errEl.textContent = String(err);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Connect Google Calendar";
+  }
+}
+
+async function disconnectGoogle() {
+  await invoke("google_disconnect");
+  googleConnected = false;
+  renderGoogleState();
   loadMeetings(true);
 }
 
@@ -232,8 +307,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   tickClock();
   setInterval(tickClock, 1000);
 
-  settings = await invoke<Settings>("get_settings");
+  [settings, googleConnected] = await Promise.all([
+    invoke<Settings>("get_settings"),
+    invoke<boolean>("google_status"),
+  ]);
   await Promise.all([loadTasks(), loadMeetings()]);
+  await listen("open-settings", openSettings);
 
   // Re-render relative times every 30s, refetch the feed every 5 min.
   setInterval(renderMeetings, 30_000);
@@ -251,6 +330,9 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   $("#btn-capture").addEventListener("click", () => invoke("show_capture"));
   $("#btn-settings").addEventListener("click", openSettings);
+  $("#btn-hide").addEventListener("click", () => invoke("hide_sidebar"));
+  $("#btn-google-connect").addEventListener("click", connectGoogle);
+  $("#btn-google-disconnect").addEventListener("click", disconnectGoogle);
   $("#btn-refresh").addEventListener("click", () => loadMeetings(true));
   $("#btn-clear-done").addEventListener("click", () => invoke("clear_done"));
   $("#settings-form").addEventListener("submit", saveSettings);

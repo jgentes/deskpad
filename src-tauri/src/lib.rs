@@ -1,16 +1,23 @@
 mod appbar;
 mod calendar;
+mod google;
 mod store;
 
 use chrono::{Duration, Utc};
+use google::Google;
+use serde::Serialize;
 use std::sync::Mutex;
 use store::{Settings, Store, Task};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+use tauri_plugin_opener::OpenerExt;
 
 const CAPTURE_SHORTCUT: &str = "ctrl+space";
 
-/// Cached calendar text so the UI can refresh often without hammering the feed.
+/// Cached ICS text so the UI can refresh often without hammering the feed.
 struct CalendarCache {
     text: String,
     fetched_at: i64,
@@ -19,6 +26,10 @@ struct CalendarCache {
 
 #[derive(Default)]
 struct CalCacheState(Mutex<Option<CalendarCache>>);
+
+/// Whether the sidebar is currently hidden via the tray.
+#[derive(Default)]
+struct SidebarHidden(Mutex<bool>);
 
 // ---------- Tasks ----------
 
@@ -90,14 +101,20 @@ fn get_settings(store: State<Store>) -> Settings {
     store.settings.lock().unwrap().clone()
 }
 
+fn apply_autostart(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    let al = app.autolaunch();
+    if enabled { al.enable() } else { al.disable() }.map_err(|e| e.to_string())
+}
+
 #[tauri::command]
-fn set_settings(app: AppHandle, store: State<Store>, settings: Settings) {
-    let width_changed;
+fn set_settings(app: AppHandle, store: State<Store>, settings: Settings) -> Result<(), String> {
+    let layout_changed;
+    let autostart_changed;
     {
         let mut s = store.settings.lock().unwrap();
-        width_changed = s.width != settings.width || s.reserve_space != settings.reserve_space;
+        layout_changed = s.width != settings.width || s.reserve_space != settings.reserve_space;
+        autostart_changed = s.autostart != settings.autostart;
         if s.ics_url != settings.ics_url {
-            // Invalidate the calendar cache.
             *app.state::<CalCacheState>().0.lock().unwrap() = None;
         }
         *s = settings.clone();
@@ -105,29 +122,47 @@ fn set_settings(app: AppHandle, store: State<Store>, settings: Settings) {
     store.save_settings();
     if let Some(win) = app.get_webview_window("main") {
         win.set_always_on_top(settings.always_on_top).ok();
-        if width_changed {
+        if layout_changed && !*app.state::<SidebarHidden>().0.lock().unwrap() {
             dock(&win, &settings);
         }
     }
+    if autostart_changed {
+        apply_autostart(&app, settings.autostart)?;
+    }
     app.emit("settings-changed", ()).ok();
+    Ok(())
 }
 
 // ---------- Calendar ----------
+
+#[derive(Serialize)]
+struct MeetingsResult {
+    source: &'static str,
+    meetings: Vec<calendar::Meeting>,
+}
 
 #[tauri::command]
 async fn get_meetings(
     store: State<'_, Store>,
     cache: State<'_, CalCacheState>,
+    google: State<'_, Google>,
     force: bool,
-) -> Result<Vec<calendar::Meeting>, String> {
-    let (url, lookahead) = {
-        let s = store.settings.lock().unwrap();
-        (s.ics_url.clone(), s.lookahead_hours as i64)
-    };
-    if url.trim().is_empty() {
-        return Ok(vec![]);
-    }
+) -> Result<MeetingsResult, String> {
+    let settings = store.settings.lock().unwrap().clone();
     let now = Utc::now();
+    let to = now + Duration::hours(settings.lookahead_hours as i64);
+
+    if google.connected() {
+        let meetings = google
+            .meetings(&settings.google_client_id, &settings.google_client_secret, now, to)
+            .await?;
+        return Ok(MeetingsResult { source: "google", meetings });
+    }
+
+    let url = settings.ics_url.trim().to_string();
+    if url.is_empty() {
+        return Ok(MeetingsResult { source: "none", meetings: vec![] });
+    }
     let cached = {
         let c = cache.0.lock().unwrap();
         c.as_ref()
@@ -146,7 +181,38 @@ async fn get_meetings(
             t
         }
     };
-    Ok(calendar::expand(&text, now, now + Duration::hours(lookahead)))
+    Ok(MeetingsResult { source: "ics", meetings: calendar::expand(&text, now, to) })
+}
+
+#[tauri::command]
+fn google_status(google: State<Google>) -> bool {
+    google.connected()
+}
+
+#[tauri::command]
+async fn google_connect(
+    app: AppHandle,
+    store: State<'_, Store>,
+    google: State<'_, Google>,
+) -> Result<(), String> {
+    let (id, secret) = {
+        let s = store.settings.lock().unwrap();
+        (s.google_client_id.clone(), s.google_client_secret.clone())
+    };
+    let opener = app.opener();
+    google
+        .connect(&id, &secret, |url| {
+            opener.open_url(url, None::<&str>).ok();
+        })
+        .await?;
+    app.emit("settings-changed", ()).ok();
+    Ok(())
+}
+
+#[tauri::command]
+fn google_disconnect(app: AppHandle, google: State<Google>) {
+    google.disconnect();
+    app.emit("settings-changed", ()).ok();
 }
 
 // ---------- Windows ----------
@@ -182,6 +248,24 @@ fn undock(win: &WebviewWindow) {
     }
 }
 
+fn set_sidebar_visible(app: &AppHandle, visible: bool) {
+    let Some(win) = app.get_webview_window("main") else { return };
+    *app.state::<SidebarHidden>().0.lock().unwrap() = !visible;
+    if visible {
+        let s = app.state::<Store>().settings.lock().unwrap().clone();
+        win.show().ok();
+        dock(&win, &s);
+    } else {
+        undock(&win);
+        win.hide().ok();
+    }
+}
+
+fn toggle_sidebar(app: &AppHandle) {
+    let hidden = *app.state::<SidebarHidden>().0.lock().unwrap();
+    set_sidebar_visible(app, hidden);
+}
+
 fn toggle_capture(app: &AppHandle) {
     let Some(win) = app.get_webview_window("capture") else { return };
     if win.is_visible().unwrap_or(false) && win.is_focused().unwrap_or(false) {
@@ -207,11 +291,25 @@ fn show_capture(app: AppHandle) {
 }
 
 #[tauri::command]
+fn hide_sidebar(app: AppHandle) {
+    set_sidebar_visible(&app, false);
+}
+
+#[tauri::command]
 fn redock(app: AppHandle, store: State<Store>) {
+    if *app.state::<SidebarHidden>().0.lock().unwrap() {
+        return;
+    }
     if let Some(win) = app.get_webview_window("main") {
         let s = store.settings.lock().unwrap().clone();
         dock(&win, &s);
     }
+}
+
+#[tauri::command]
+fn open_settings(app: AppHandle) {
+    set_sidebar_visible(&app, true);
+    app.emit_to("main", "open-settings", ()).ok();
 }
 
 #[tauri::command]
@@ -222,10 +320,46 @@ fn quit(app: AppHandle) {
     app.exit(0);
 }
 
+fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    let toggle = MenuItem::with_id(app, "toggle", "Show / hide sidebar", true, None::<&str>)?;
+    let capture = MenuItem::with_id(app, "capture", "Capture task\tCtrl+Space", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, "quit", "Quit Deskpad", true, None::<&str>)?;
+    let menu = Menu::with_items(
+        app,
+        &[&toggle, &capture, &settings, &PredefinedMenuItem::separator(app)?, &quit_item],
+    )?;
+    let mut builder = TrayIconBuilder::with_id("main")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .tooltip("Deskpad")
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "toggle" => toggle_sidebar(app),
+            "capture" => toggle_capture(app),
+            "settings" => open_settings(app.clone()),
+            "quit" => quit(app.clone()),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                toggle_sidebar(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+    builder.build(app)?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
@@ -237,17 +371,24 @@ pub fn run() {
                 .build(),
         )
         .manage(CalCacheState::default())
+        .manage(SidebarHidden::default())
         .setup(|app| {
             let dir = app.path().app_data_dir().expect("app data dir");
-            let store = Store::load(dir);
+            let store = Store::load(dir.clone());
             let settings = store.settings.lock().unwrap().clone();
             app.manage(store);
+            app.manage(Google::load(&dir));
 
             if let Some(win) = app.get_webview_window("main") {
                 win.set_always_on_top(settings.always_on_top).ok();
                 dock(&win, &settings);
                 win.show().ok();
             }
+
+            build_tray(app.handle())?;
+
+            // Keep the registry entry in sync with the saved preference.
+            apply_autostart(app.handle(), settings.autostart).ok();
 
             if let Err(e) = app.global_shortcut().register(CAPTURE_SHORTCUT) {
                 eprintln!("failed to register {CAPTURE_SHORTCUT}: {e}");
@@ -261,10 +402,10 @@ pub fn run() {
                 WindowEvent::Focused(false) if window.label() == "capture" => {
                     window.hide().ok();
                 }
-                WindowEvent::Destroyed if window.label() == "main" => {
-                    if let Some(win) = window.app_handle().get_webview_window("main") {
-                        undock(&win);
-                    }
+                WindowEvent::CloseRequested { api, .. } if window.label() == "main" => {
+                    // Closing the sidebar hides it to the tray instead of quitting.
+                    api.prevent_close();
+                    set_sidebar_visible(window.app_handle(), false);
                 }
                 _ => {}
             }
@@ -279,9 +420,14 @@ pub fn run() {
             get_settings,
             set_settings,
             get_meetings,
+            google_status,
+            google_connect,
+            google_disconnect,
             hide_capture,
             show_capture,
+            hide_sidebar,
             redock,
+            open_settings,
             quit
         ])
         .run(tauri::generate_context!())

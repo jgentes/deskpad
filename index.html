@@ -17,6 +17,7 @@
       <div class="bar-actions">
         <button id="btn-capture" class="icon" title="Capture task (Ctrl+Space)">＋</button>
         <button id="btn-settings" class="icon" title="Settings">⚙</button>
+        <button id="btn-hide" class="icon" title="Hide to tray">⌄</button>
       </div>
     </header>
 
@@ -46,8 +47,34 @@
     <div id="settings" class="modal hidden">
       <form id="settings-form" class="modal-card">
         <h2>Settings</h2>
+
+        <fieldset>
+          <legend>Google Calendar</legend>
+          <div id="google-connected" class="google-row hidden">
+            <span class="ok">● Connected</span>
+            <button type="button" id="btn-google-disconnect">Disconnect</button>
+          </div>
+          <div id="google-disconnected">
+            <label>
+              OAuth client ID
+              <input id="s-gid" placeholder="…apps.googleusercontent.com" />
+            </label>
+            <label>
+              OAuth client secret
+              <input id="s-gsecret" type="password" placeholder="GOCSPX-…" />
+              <small>
+                Create a <b>Desktop app</b> OAuth client in Google Cloud Console (APIs &amp; Services →
+                Credentials) with the Calendar API enabled, then paste both values and connect.
+                Shows all calendars you have checked in Google Calendar, with Meet join links.
+              </small>
+            </label>
+            <button type="button" id="btn-google-connect" class="primary">Connect Google Calendar</button>
+            <div id="google-error" class="error"></div>
+          </div>
+        </fieldset>
+
         <label>
-          Calendar feed URL (.ics)
+          Calendar feed URL (.ics) <small>(used when Google is not connected)</small>
           <input id="s-ics" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics" />
           <small>
             Google Calendar: Settings → your calendar → “Secret address in iCal format”.
@@ -69,6 +96,10 @@
         <label class="check">
           <input id="s-top" type="checkbox" />
           Always on top
+        </label>
+        <label class="check">
+          <input id="s-autostart" type="checkbox" />
+          Start Deskpad when I sign in to Windows
         </label>
         <div class="modal-actions">
           <button type="button" id="btn-quit" class="danger">Quit Deskpad</button>
