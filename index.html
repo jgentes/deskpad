@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Deskpad</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body class="sidebar">
+    <header class="bar" data-tauri-drag-region>
+      <div class="clock">
+        <div id="clock-time">--:--</div>
+        <div id="clock-date"></div>
+      </div>
+      <div class="bar-actions">
+        <button id="btn-capture" class="icon" title="Capture task (Ctrl+Space)">＋</button>
+        <button id="btn-settings" class="icon" title="Settings">⚙</button>
+      </div>
+    </header>
+
+    <section class="panel" id="meetings-panel">
+      <div class="panel-head">
+        <h2>Up next</h2>
+        <button id="btn-refresh" class="icon small" title="Refresh calendar">↻</button>
+      </div>
+      <div id="meetings" class="list"></div>
+    </section>
+
+    <section class="panel grow" id="tasks-panel">
+      <div class="panel-head">
+        <h2>Tasks <span id="task-count" class="count"></span></h2>
+        <button id="btn-clear-done" class="link" title="Remove completed tasks">clear done</button>
+      </div>
+      <form id="task-form" class="task-form">
+        <input id="task-input" placeholder="Add a task…" autocomplete="off" />
+      </form>
+      <div id="tasks" class="list"></div>
+    </section>
+
+    <footer class="hint">
+      <kbd>Ctrl</kbd> + <kbd>Space</kbd> captures from anywhere
+    </footer>
+
+    <div id="settings" class="modal hidden">
+      <form id="settings-form" class="modal-card">
+        <h2>Settings</h2>
+        <label>
+          Calendar feed URL (.ics)
+          <input id="s-ics" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics" />
+          <small>
+            Google Calendar: Settings → your calendar → “Secret address in iCal format”.
+            Outlook: Settings → Calendar → Shared calendars → Publish → ICS link.
+          </small>
+        </label>
+        <label>
+          Look ahead (hours)
+          <input id="s-lookahead" type="number" min="1" max="336" />
+        </label>
+        <label>
+          Sidebar width (px)
+          <input id="s-width" type="number" min="240" max="600" />
+        </label>
+        <label class="check">
+          <input id="s-reserve" type="checkbox" />
+          Reserve screen space (maximized windows stop at the sidebar)
+        </label>
+        <label class="check">
+          <input id="s-top" type="checkbox" />
+          Always on top
+        </label>
+        <div class="modal-actions">
+          <button type="button" id="btn-quit" class="danger">Quit Deskpad</button>
+          <span class="spacer"></span>
+          <button type="button" id="btn-settings-cancel">Cancel</button>
+          <button type="submit" class="primary">Save</button>
+        </div>
+      </form>
+    </div>
+  </body>
+</html>
