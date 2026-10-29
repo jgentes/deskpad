@@ -38,6 +38,21 @@
         "transparent": true,
         "shadow": false,
         "center": true
+      },
+      {
+        "label": "tab",
+        "title": "Deskpad",
+        "url": "tab.html",
+        "width": 18,
+        "height": 72,
+        "decorations": false,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "transparent": true,
+        "shadow": false,
+        "focus": false
       }
     ],
     "security": {

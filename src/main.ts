@@ -344,7 +344,4 @@ window.addEventListener("DOMContentLoaded", async () => {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") $("#settings").classList.add("hidden");
   });
-
-  // Re-dock when the display layout changes (resolution / monitor swap).
-  window.addEventListener("resize", () => invoke("redock"));
 });

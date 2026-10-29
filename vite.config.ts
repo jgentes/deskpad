@@ -12,6 +12,7 @@ export default defineConfig(() => ({
       input: {
         main: resolve(process.cwd(), "index.html"),
         capture: resolve(process.cwd(), "capture.html"),
+        tab: resolve(process.cwd(), "tab.html"),
       },
     },
   },

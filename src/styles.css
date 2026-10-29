@@ -76,21 +76,47 @@ button.icon {
   width: 32px;
   height: 32px;
   padding: 0;
-  font-size: 17px;
-  line-height: 1;
+  background: transparent;
+  color: var(--fg-2);
+  border-radius: 8px;
   display: grid;
   place-items: center;
+}
+button.icon svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+button.icon:hover {
+  color: var(--fg);
+  background: var(--bg-3);
+}
+button.icon:active {
+  background: #353a47;
 }
 button.icon.small {
   width: 24px;
   height: 24px;
-  font-size: 14px;
-  background: transparent;
-  color: var(--fg-2);
+  color: var(--fg-3);
+}
+button.icon.small svg {
+  width: 14px;
+  height: 14px;
 }
 button.icon.small:hover {
   color: var(--fg);
-  background: var(--bg-3);
+}
+button.icon.spin svg {
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 button.link {
   background: none;
@@ -483,4 +509,28 @@ button[disabled] {
 .meeting.now .m-join {
   color: var(--now);
   background: rgba(76, 210, 127, 0.14);
+}
+
+/* ---------- collapsed edge tab ---------- */
+body.tab {
+  background: transparent;
+  display: grid;
+  place-items: stretch;
+}
+.edge-tab {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 1px solid #3a3f4b;
+  border-right: none;
+  border-radius: 8px 0 0 8px;
+  background: var(--bg-2);
+  color: var(--fg-2);
+  display: grid;
+  place-items: center;
+  box-shadow: -2px 0 10px rgba(0, 0, 0, 0.4);
+}
+.edge-tab:hover {
+  background: var(--bg-3);
+  color: var(--fg);
 }

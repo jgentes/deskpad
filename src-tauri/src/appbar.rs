@@ -11,7 +11,7 @@ pub mod imp {
         SHAppBarMessage, ABE_RIGHT, ABM_NEW, ABM_QUERYPOS, ABM_REMOVE, ABM_SETPOS, APPBARDATA,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW,
+        SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
     };
 
     fn data(hwnd: HWND) -> APPBARDATA {
@@ -25,9 +25,8 @@ pub mod imp {
         }
     }
 
-    /// Dock the window to the right edge. When `reserve` is true the space is reserved
-    /// via the shell AppBar API. Returns the final physical rect (x, y, w, h).
-    pub unsafe fn dock_right(hwnd: HWND, width_px: i32, reserve: bool) -> (i32, i32, i32, i32) {
+    /// Physical rect of the monitor the window is on: (full, work).
+    pub unsafe fn monitor_rects(hwnd: HWND) -> (RECT, RECT) {
         unsafe {
             let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
             let mut mi = MONITORINFO {
@@ -35,10 +34,21 @@ pub mod imp {
                 ..Default::default()
             };
             let _ = GetMonitorInfoW(monitor, &mut mi);
-            let work = mi.rcWork;
-            let full = mi.rcMonitor;
+            (mi.rcMonitor, mi.rcWork)
+        }
+    }
 
+    /// Dock the window to the right edge. When `reserve` is true the space is reserved
+    /// via the shell AppBar API. Safe to call repeatedly: any previous registration for
+    /// this window is dropped first so the new position is computed against a clean
+    /// work area (otherwise the shell would push us left of our own old reservation).
+    /// Returns the final physical rect (x, y, w, h).
+    pub unsafe fn dock_right(hwnd: HWND, width_px: i32, reserve: bool) -> (i32, i32, i32, i32) {
+        unsafe {
             let mut abd = data(hwnd);
+            SHAppBarMessage(ABM_REMOVE, &mut abd);
+
+            let (full, work) = monitor_rects(hwnd);
             if reserve {
                 SHAppBarMessage(ABM_NEW, &mut abd);
                 abd.rc = RECT {
@@ -51,7 +61,6 @@ pub mod imp {
                 abd.rc.left = abd.rc.right - width_px;
                 SHAppBarMessage(ABM_SETPOS, &mut abd);
             } else {
-                SHAppBarMessage(ABM_REMOVE, &mut abd);
                 abd.rc = RECT {
                     left: work.right - width_px,
                     top: work.top,
@@ -77,6 +86,16 @@ pub mod imp {
         unsafe {
             let mut abd = data(hwnd);
             SHAppBarMessage(ABM_REMOVE, &mut abd);
+        }
+    }
+
+    /// Hide natively. We deliberately bypass tao's `set_visible(false)` here: its
+    /// matching show path re-applies window styles and calls ShowWindow, which makes
+    /// Windows nudge a window that sits entirely outside the work area (i.e. an
+    /// appbar) back inside it. `dock_right` shows the window again via SetWindowPos.
+    pub unsafe fn hide(hwnd: HWND) {
+        unsafe {
+            let _ = ShowWindow(hwnd, SW_HIDE);
         }
     }
 }

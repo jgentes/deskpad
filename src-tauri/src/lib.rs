@@ -248,17 +248,74 @@ fn undock(win: &WebviewWindow) {
     }
 }
 
+/// Hide the docked sidebar without going through tao (see `appbar::imp::hide`).
+fn hide_native(win: &WebviewWindow) {
+    #[cfg(windows)]
+    {
+        if let Ok(hwnd) = win.hwnd() {
+            unsafe { appbar::imp::hide(windows::Win32::Foundation::HWND(hwnd.0)) }
+            return;
+        }
+    }
+    win.hide().ok();
+}
+
+/// Logical size of the edge tab shown while the sidebar is collapsed.
+const TAB_W: f64 = 18.0;
+const TAB_H: f64 = 72.0;
+
+/// Pin the collapse tab to the right edge of the sidebar's monitor, vertically centered.
+fn place_tab(app: &AppHandle) {
+    let (Some(tab), Some(main)) = (app.get_webview_window("tab"), app.get_webview_window("main"))
+    else {
+        return;
+    };
+    #[cfg(windows)]
+    {
+        if let Ok(hwnd) = main.hwnd() {
+            let (full, _) = unsafe { appbar::imp::monitor_rects(windows::Win32::Foundation::HWND(hwnd.0)) };
+            let scale = tab.scale_factor().unwrap_or(1.0);
+            let w = (TAB_W * scale).round() as i32;
+            let h = (TAB_H * scale).round() as i32;
+            tab.set_size(tauri::PhysicalSize::new(w as u32, h as u32)).ok();
+            tab.set_position(tauri::PhysicalPosition::new(
+                full.right - w,
+                full.top + (full.bottom - full.top - h) / 2,
+            ))
+            .ok();
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = main;
+    }
+}
+
 fn set_sidebar_visible(app: &AppHandle, visible: bool) {
     let Some(win) = app.get_webview_window("main") else { return };
     *app.state::<SidebarHidden>().0.lock().unwrap() = !visible;
+    let tab = app.get_webview_window("tab");
     if visible {
+        if let Some(t) = &tab {
+            t.hide().ok();
+        }
         let s = app.state::<Store>().settings.lock().unwrap().clone();
-        win.show().ok();
+        // dock() shows the window itself (SWP_SHOWWINDOW); do not call win.show() here.
         dock(&win, &s);
     } else {
         undock(&win);
-        win.hide().ok();
+        hide_native(&win);
+        place_tab(app);
+        if let Some(t) = &tab {
+            t.show().ok();
+            t.set_always_on_top(true).ok();
+        }
     }
+}
+
+#[tauri::command]
+fn show_sidebar(app: AppHandle) {
+    set_sidebar_visible(&app, true);
 }
 
 fn toggle_sidebar(app: &AppHandle) {
@@ -387,9 +444,6 @@ pub fn run() {
 
             build_tray(app.handle())?;
 
-            // Keep the registry entry in sync with the saved preference.
-            apply_autostart(app.handle(), settings.autostart).ok();
-
             if let Err(e) = app.global_shortcut().register(CAPTURE_SHORTCUT) {
                 eprintln!("failed to register {CAPTURE_SHORTCUT}: {e}");
                 app.emit("shortcut-error", e.to_string()).ok();
@@ -426,6 +480,7 @@ pub fn run() {
             hide_capture,
             show_capture,
             hide_sidebar,
+            show_sidebar,
             redock,
             open_settings,
             quit
