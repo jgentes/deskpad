@@ -168,7 +168,11 @@ async function loadTasks() {
   const tasks = await invoke<Task[]>("list_tasks");
   const el = $("#tasks");
   const open = tasks.filter((t) => !t.done).length;
+  const done = tasks.length - open;
   $("#task-count").textContent = open ? String(open) : "";
+  const clearBtn = $<HTMLButtonElement>("#btn-clear-done");
+  clearBtn.hidden = done === 0;
+  clearBtn.textContent = done === 1 ? "clear 1 completed" : `clear ${done} completed`;
   if (tasks.length === 0) {
     el.innerHTML = `<div class="empty">No tasks yet. Press <kbd>Ctrl</kbd>+<kbd>Space</kbd> anywhere to capture one.</div>`;
     return;
@@ -303,29 +307,20 @@ async function disconnectGoogle() {
 
 // ---------- boot ----------
 
-window.addEventListener("DOMContentLoaded", async () => {
-  tickClock();
-  setInterval(tickClock, 1000);
-
-  [settings, googleConnected] = await Promise.all([
-    invoke<Settings>("get_settings"),
-    invoke<boolean>("google_status"),
-  ]);
-  await Promise.all([loadTasks(), loadMeetings()]);
-  await listen("open-settings", openSettings);
-
-  // Re-render relative times every 30s, refetch the feed every 5 min.
-  setInterval(renderMeetings, 30_000);
-  setInterval(() => loadMeetings(), 5 * 60_000);
-
-  await listen("tasks-changed", loadTasks);
-
+function wireUi() {
   $("#task-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const input = $<HTMLInputElement>("#task-input");
-    if (!input.value.trim()) return;
-    await invoke("add_task", { text: input.value });
+    const text = input.value.trim();
+    if (!text) return;
     input.value = "";
+    try {
+      await invoke("add_task", { text });
+    } catch (err) {
+      console.error("add_task failed", err);
+      input.value = text;
+    }
+    loadTasks();
   });
 
   $("#btn-capture").addEventListener("click", () => invoke("show_capture"));
@@ -334,7 +329,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#btn-google-connect").addEventListener("click", connectGoogle);
   $("#btn-google-disconnect").addEventListener("click", disconnectGoogle);
   $("#btn-refresh").addEventListener("click", () => loadMeetings(true));
-  $("#btn-clear-done").addEventListener("click", () => invoke("clear_done"));
+  $("#btn-clear-done").addEventListener("click", async () => {
+    await invoke("clear_done");
+    loadTasks();
+  });
   $("#settings-form").addEventListener("submit", saveSettings);
   $("#btn-settings-cancel").addEventListener("click", () => $("#settings").classList.add("hidden"));
   $("#btn-quit").addEventListener("click", () => invoke("quit"));
@@ -344,4 +342,44 @@ window.addEventListener("DOMContentLoaded", async () => {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") $("#settings").classList.add("hidden");
   });
+}
+
+window.addEventListener("error", (e) => invoke("log_js", { msg: `error: ${e.message} @${e.filename}:${e.lineno}` }).catch(() => {}));
+window.addEventListener("unhandledrejection", (e) => invoke("log_js", { msg: `unhandled: ${String(e.reason)}` }).catch(() => {}));
+
+window.addEventListener("DOMContentLoaded", async () => {
+  // Wire every control first, synchronously, so a slow or failed backend call
+  // can never leave the UI inert (or let the task form do a native submit).
+  wireUi();
+  tickClock();
+  setInterval(tickClock, 1000);
+
+  try {
+    [settings, googleConnected] = await Promise.all([
+      invoke<Settings>("get_settings"),
+      invoke<boolean>("google_status"),
+    ]);
+  } catch (err) {
+    console.error("failed to load settings", err);
+    settings = {
+      ics_url: "",
+      google_client_id: "",
+      google_client_secret: "",
+      always_on_top: false,
+      reserve_space: true,
+      autostart: false,
+      width: 340,
+      lookahead_hours: 36,
+    };
+  }
+
+  loadTasks().catch((err) => console.error("loadTasks failed", err));
+  loadMeetings().catch((err) => console.error("loadMeetings failed", err));
+
+  // Re-render relative times every 30s, refetch the feed every 5 min.
+  setInterval(renderMeetings, 30_000);
+  setInterval(() => loadMeetings(), 5 * 60_000);
+
+  listen("tasks-changed", () => loadTasks()).catch((err) => console.error("listen failed", err));
+  listen("open-settings", () => openSettings()).catch((err) => console.error("listen failed", err));
 });

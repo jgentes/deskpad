@@ -369,6 +369,12 @@ fn open_settings(app: AppHandle) {
     app.emit_to("main", "open-settings", ()).ok();
 }
 
+/// Relay webview errors to stderr so they show up in `tauri dev` output.
+#[tauri::command]
+fn log_js(window: tauri::Window, msg: String) {
+    eprintln!("[js:{}] {msg}", window.label());
+}
+
 #[tauri::command]
 fn quit(app: AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
@@ -483,6 +489,7 @@ pub fn run() {
             show_sidebar,
             redock,
             open_settings,
+            log_js,
             quit
         ])
         .run(tauri::generate_context!())

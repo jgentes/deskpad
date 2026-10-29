@@ -11,8 +11,8 @@ window.addEventListener("DOMContentLoaded", async () => {
     input.select();
   };
 
-  await listen("capture-shown", focus);
   focus();
+  listen("capture-shown", focus).catch((err) => console.error("listen failed", err));
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
