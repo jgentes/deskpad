@@ -260,6 +260,12 @@ function wireUi() {
   });
 }
 
+const nativeError = console.error.bind(console);
+console.error = (...args: unknown[]) => {
+  nativeError(...args);
+  invoke("log_js", { msg: args.map((a) => (a instanceof Error ? `${a.message}
+${a.stack ?? ""}` : String(a))).join(" ") }).catch(() => {});
+};
 window.addEventListener("error", (e) => invoke("log_js", { msg: `error: ${e.message} @${e.filename}:${e.lineno}` }).catch(() => {}));
 window.addEventListener("unhandledrejection", (e) => invoke("log_js", { msg: `unhandled: ${String(e.reason)}` }).catch(() => {}));
 
@@ -270,24 +276,20 @@ window.addEventListener("DOMContentLoaded", async () => {
   tickClock();
   setInterval(tickClock, 1000);
 
-  try {
-    [settings, googleConnected] = await Promise.all([
-      invoke<Settings>("get_settings"),
-      invoke<boolean>("google_status"),
-    ]);
-  } catch (err) {
-    console.error("failed to load settings", err);
-    settings = {
-      ics_url: "",
-      google_client_id: "",
-      google_client_secret: "",
-      always_on_top: false,
-      reserve_space: true,
-      autostart: false,
-      width: 340,
-      lookahead_hours: 36,
-      show_all_day: true,
-    };
+  // Retry rather than fall back to defaults: a failed load must never look
+  // like an unconfigured app, and nothing below runs until settings are real.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      [settings, googleConnected] = await Promise.all([
+        invoke<Settings>("get_settings"),
+        invoke<boolean>("google_status"),
+      ]);
+      break;
+    } catch (err) {
+      console.error(`failed to load settings (attempt ${attempt + 1})`, err);
+      if (attempt === 0) $("#meetings").innerHTML = `<div class="error">Connecting to Deskpad…</div>`;
+      await new Promise((r) => setTimeout(r, Math.min(5000, 400 * (attempt + 1))));
+    }
   }
 
   loadItems().catch((err) => console.error("loadItems failed", err));

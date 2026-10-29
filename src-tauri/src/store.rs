@@ -111,35 +111,107 @@ pub struct Store {
 impl Store {
     pub fn load(dir: PathBuf) -> Self {
         fs::create_dir_all(&dir).ok();
-        let items = fs::read_to_string(dir.join("tasks.json"))
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
-        let settings = fs::read_to_string(dir.join("settings.json"))
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
+        let items = load_json(&dir.join("tasks.json")).unwrap_or_default();
+        let settings = load_json(&dir.join("settings.json")).unwrap_or_default();
         Self { dir, items: Mutex::new(items), settings: Mutex::new(settings) }
     }
 
     pub fn save_items(&self) {
         let items = self.items.lock().unwrap();
         if let Ok(json) = serde_json::to_string_pretty(&*items) {
-            fs::write(self.dir.join("tasks.json"), json).ok();
+            let path = self.dir.join("tasks.json");
+            backup_daily(&path, &self.dir.join("backups"));
+            write_atomic(&path, &json);
         }
     }
 
     pub fn save_settings(&self) {
         let settings = self.settings.lock().unwrap();
         if let Ok(json) = serde_json::to_string_pretty(&*settings) {
-            fs::write(self.dir.join("settings.json"), json).ok();
+            write_atomic(&self.dir.join("settings.json"), &json);
         }
+    }
+}
+
+/// Read and parse a JSON file. A file that exists but does not parse is moved
+/// aside as `<name>.corrupt-<timestamp>` instead of being silently replaced by
+/// defaults on the next save.
+pub fn load_json<T: serde::de::DeserializeOwned>(path: &std::path::Path) -> Option<T> {
+    let text = fs::read_to_string(path).ok()?;
+    match serde_json::from_str(&text) {
+        Ok(v) => Some(v),
+        Err(err) => {
+            let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+            let aside = path.with_file_name(format!(
+                "{}.corrupt-{stamp}",
+                path.file_name().and_then(|n| n.to_str()).unwrap_or("data.json")
+            ));
+            eprintln!("[store] {} failed to parse ({err}); moved to {}", path.display(), aside.display());
+            fs::rename(path, &aside).ok();
+            None
+        }
+    }
+}
+
+/// Write via a temp file and rename so a crash mid-write never leaves a
+/// truncated file behind.
+pub fn write_atomic(path: &std::path::Path, contents: &str) {
+    let tmp = path.with_extension("json.tmp");
+    if let Err(err) = fs::write(&tmp, contents).and_then(|_| fs::rename(&tmp, path)) {
+        eprintln!("[store] failed to write {}: {err}", path.display());
+    }
+}
+
+/// Keep the first version of the file seen each day in `backups/`, pruning to
+/// the newest 30. Runs before every overwrite; cheap when today's copy exists.
+pub fn backup_daily(path: &std::path::Path, backups: &std::path::Path) {
+    if !path.exists() {
+        return;
+    }
+    let stem = path.file_stem().and_then(|n| n.to_str()).unwrap_or("data");
+    let today = chrono::Local::now().format("%Y-%m-%d");
+    let dest = backups.join(format!("{stem}-{today}.json"));
+    if dest.exists() {
+        return;
+    }
+    fs::create_dir_all(backups).ok();
+    fs::copy(path, &dest).ok();
+    let mut old: Vec<_> = fs::read_dir(backups)
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(&format!("{stem}-"))))
+                .collect()
+        })
+        .unwrap_or_default();
+    old.sort();
+    for p in old.iter().rev().skip(30) {
+        fs::remove_file(p).ok();
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_marker;
+    use super::{backup_daily, load_json, parse_marker, write_atomic};
+
+    #[test]
+    fn corrupt_file_is_set_aside_not_overwritten() {
+        let dir = std::env::temp_dir().join(format!("deskpad-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tasks.json");
+        std::fs::write(&path, "{not json").unwrap();
+        let loaded: Option<Vec<super::Item>> = load_json(&path);
+        assert!(loaded.is_none());
+        assert!(!path.exists(), "corrupt file should have been moved aside");
+        let aside = std::fs::read_dir(&dir).unwrap().flatten().find(|e| e.file_name().to_string_lossy().starts_with("tasks.json.corrupt-"));
+        assert!(aside.is_some());
+
+        write_atomic(&path, "[]");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[]");
+        backup_daily(&path, &dir.join("backups"));
+        assert_eq!(std::fs::read_dir(dir.join("backups")).unwrap().count(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn markers() {

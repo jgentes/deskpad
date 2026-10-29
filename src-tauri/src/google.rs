@@ -101,7 +101,7 @@ impl Google {
         match &t {
             Some(t) => {
                 if let Ok(json) = serde_json::to_string_pretty(t) {
-                    fs::write(&self.path, json).ok();
+                    crate::store::write_atomic(&self.path, &json);
                 }
             }
             None => {

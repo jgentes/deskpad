@@ -17,6 +17,9 @@ export interface Item {
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
 let items: Item[] = [];
+/** Set once the backend list has been read. Until then nothing is ever saved,
+ *  so a transient startup failure can never overwrite the stored notes. */
+let loaded = false;
 let saveTimer: number | undefined;
 let dirty = false;
 let pendingFocus: { id: number | "new"; caret: number | "end" } | null = null;
@@ -75,7 +78,7 @@ function scheduleSave() {
 
 async function flushSave() {
   window.clearTimeout(saveTimer);
-  if (!dirty) return;
+  if (!dirty || !loaded) return;
   dirty = false;
   try {
     await invoke("set_items", { items });
@@ -85,13 +88,22 @@ async function flushSave() {
   }
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 export async function loadItems() {
-  let fetched: Item[];
-  try {
-    fetched = await invoke<Item[]>("list_items");
-  } catch (err) {
-    console.error("list_items failed", err);
-    fetched = items;
+  let fetched: Item[] | null = null;
+  for (let attempt = 0; attempt < 5 && fetched === null; attempt++) {
+    try {
+      fetched = await invoke<Item[]>("list_items");
+    } catch (err) {
+      console.error(`list_items failed (attempt ${attempt + 1})`, err);
+      await sleep(400 * (attempt + 1));
+    }
+  }
+  if (fetched === null) {
+    $("#outline").innerHTML = `<div class="error">Couldn't load notes. <a id="retry-items">Retry</a></div>`;
+    $("#retry-items").addEventListener("click", () => loadItems());
+    return;
   }
   if (dirty) {
     // Keep unsaved local text edits for rows the backend still has.
@@ -101,6 +113,7 @@ export async function loadItems() {
     }
   }
   items = fetched;
+  loaded = true;
   render();
 }
 

@@ -71,6 +71,36 @@ Open Settings (gear icon) and paste an `.ics` URL:
 
 The feed is re-fetched every 5 minutes; the refresh button forces a fetch.
 
+## Installing (release build)
+
+```powershell
+cd D:\deskpad; npm run tauri build
+```
+
+Produces two installers under `src-tauri	argeteleaseundle\`:
+
+- `nsis\Deskpad_<version>_x64-setup.exe` — per-user installer, no admin prompt (recommended)
+- `msi\Deskpad_<version>_x64_en-US.msi` — Windows Installer package
+
+Bump `version` in `src-tauri/tauri.conf.json` before building a new release; the
+installer upgrades in place. The installed app and the dev build share the same
+data folder, so notes and settings carry over.
+
+## Your data
+
+Everything lives in `%APPDATA%\com.jgentes.deskpad\`:
+
+| File | Contents |
+|---|---|
+| `tasks.json` | the notes/tasks outline |
+| `settings.json` | settings, including the Google OAuth client |
+| `google_tokens.json` | Google refresh token (delete to sign out) |
+| `backups	asks-YYYY-MM-DD.json` | first copy of the outline seen each day, newest 30 kept |
+
+Writes are atomic (temp file + rename). A file that fails to parse is moved
+aside as `*.corrupt-<timestamp>` rather than overwritten, and the UI never
+saves the outline until it has successfully loaded it from disk.
+
 ## Layout
 
 | Path | What |
