@@ -22,6 +22,7 @@ interface Settings {
   autostart: boolean;
   width: number;
   lookahead_hours: number;
+  show_all_day: boolean;
 }
 
 interface MeetingsResult {
@@ -93,7 +94,7 @@ function renderMeetings() {
     el.querySelector("#link-settings")?.addEventListener("click", openSettings);
     return;
   }
-  const upcoming = meetings.filter((m) => m.end > now - 15 * 60);
+  const upcoming = meetings.filter((m) => m.end > now - 15 * 60 && (settings.show_all_day || !m.all_day));
   if (upcoming.length === 0) {
     el.innerHTML = `<div class="empty">Nothing scheduled in the next ${settings.lookahead_hours}h.</div>`;
     return;
@@ -167,6 +168,7 @@ function openSettings() {
   $<HTMLInputElement>("#s-gsecret").value = settings.google_client_secret;
   $<HTMLInputElement>("#s-lookahead").value = String(settings.lookahead_hours);
   $<HTMLInputElement>("#s-width").value = String(settings.width);
+  $<HTMLInputElement>("#s-allday").checked = settings.show_all_day;
   $<HTMLInputElement>("#s-reserve").checked = settings.reserve_space;
   $<HTMLInputElement>("#s-top").checked = settings.always_on_top;
   $<HTMLInputElement>("#s-autostart").checked = settings.autostart;
@@ -182,6 +184,7 @@ function readSettingsForm(): Settings {
     google_client_secret: $<HTMLInputElement>("#s-gsecret").value.trim(),
     lookahead_hours: Math.max(1, Number($<HTMLInputElement>("#s-lookahead").value) || 36),
     width: Math.min(600, Math.max(240, Number($<HTMLInputElement>("#s-width").value) || 340)),
+    show_all_day: $<HTMLInputElement>("#s-allday").checked,
     reserve_space: $<HTMLInputElement>("#s-reserve").checked,
     always_on_top: $<HTMLInputElement>("#s-top").checked,
     autostart: $<HTMLInputElement>("#s-autostart").checked,
@@ -283,6 +286,7 @@ window.addEventListener("DOMContentLoaded", async () => {
       autostart: false,
       width: 340,
       lookahead_hours: 36,
+      show_all_day: true,
     };
   }
 

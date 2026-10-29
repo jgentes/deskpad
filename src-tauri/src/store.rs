@@ -83,6 +83,7 @@ pub struct Settings {
     pub autostart: bool,
     pub width: u32,
     pub lookahead_hours: u32,
+    pub show_all_day: bool,
 }
 
 impl Default for Settings {
@@ -96,6 +97,7 @@ impl Default for Settings {
             autostart: false,
             width: 340,
             lookahead_hours: 36,
+            show_all_day: true,
         }
     }
 }
