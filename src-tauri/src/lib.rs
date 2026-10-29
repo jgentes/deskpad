@@ -378,8 +378,27 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Same location Tauri's `app_data_dir()` resolves to on Windows
+/// (`%APPDATA%\<identifier>`), computed without an AppHandle so the store can
+/// be managed before any window exists.
+fn app_data_dir(identifier: &str) -> std::path::PathBuf {
+    std::env::var_os("APPDATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(identifier)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Load persistent state *before* the Builder runs: windows declared in
+    // tauri.conf.json are created before the setup hook, and the webview can
+    // invoke commands in that gap. State registered inside setup is then not
+    // yet managed and every call fails, which once made the UI look wiped.
+    let context = tauri::generate_context!();
+    let dir = app_data_dir(&context.config().identifier);
+    let store = Store::load(dir.clone());
+    let google = Google::load(&dir);
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
@@ -398,12 +417,16 @@ pub fn run() {
         )
         .manage(CalCacheState::default())
         .manage(SidebarHidden::default())
+        .manage(store)
+        .manage(google)
         .setup(|app| {
-            let dir = app.path().app_data_dir().expect("app data dir");
-            let store = Store::load(dir.clone());
-            let settings = store.settings.lock().unwrap().clone();
-            app.manage(store);
-            app.manage(Google::load(&dir));
+            if let Ok(resolved) = app.path().app_data_dir() {
+                let used = &app.state::<Store>().dir;
+                if &resolved != used {
+                    eprintln!("[store] warning: using {} but Tauri resolves {}", used.display(), resolved.display());
+                }
+            }
+            let settings = app.state::<Store>().settings.lock().unwrap().clone();
 
             if let Some(win) = app.get_webview_window("main") {
                 win.set_always_on_top(settings.always_on_top).ok();
@@ -452,6 +475,6 @@ pub fn run() {
             log_js,
             quit
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }
