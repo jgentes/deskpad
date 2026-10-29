@@ -95,7 +95,7 @@ Everything lives in `%APPDATA%\com.jgentes.deskpad\`:
 | `tasks.json` | the notes/tasks outline |
 | `settings.json` | settings, including the Google OAuth client |
 | `google_tokens.json` | Google refresh token (delete to sign out) |
-| `backups	asks-YYYY-MM-DD.json` | first copy of the outline seen each day, newest 30 kept |
+| `backups\tasks-YYYY-MM-DD.json` | first copy of the outline seen each day, newest 30 kept |
 
 Writes are atomic (temp file + rename). A file that fails to parse is moved
 aside as `*.corrupt-<timestamp>` rather than overwritten, and the UI never
