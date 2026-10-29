@@ -1,7 +1,7 @@
 # Deskpad
 
 A Windows 11 sidebar that docks to the right edge of your display, shows your
-upcoming meetings, and lets you capture tasks from anywhere with **Ctrl+Space**.
+upcoming meetings, and keeps a Workflowy-style outline of notes and tasks. Capture one from anywhere with **Ctrl+Space**.
 
 Built with [Tauri 2](https://tauri.app) (Rust backend, WebView2 frontend).
 
@@ -16,8 +16,12 @@ Built with [Tauri 2](https://tauri.app) (Rust backend, WebView2 frontend).
 - **Tray icon**: left-click toggles the sidebar, right-click for capture,
   settings, and quit. Hiding the sidebar releases its reserved screen space.
 - **Start on sign-in** toggle in Settings (adds a Run registry entry).
-- **Task list** persisted locally (`%APPDATA%\com.jgentes.deskpad\tasks.json`).
-  Check off, edit (double-click), delete, and clear completed tasks.
+- **Notes & tasks outline** persisted locally (`%APPDATA%\com.jgentes.deskpad\tasks.json`).
+  Every row is a note by default. Start it with `- ` or `[]`, or put `/task` anywhere
+  in the text, to make it a task (`/note` converts back, as does **Ctrl+Enter**).
+  **Tab** nests a row under the one above (one level), **Shift+Tab** un-nests,
+  **Enter** splits or creates a row, **Backspace** on an empty row deletes it.
+  Click a bullet to turn a note into a task; click a checkbox to complete it.
 - **Global quick capture**: press **Ctrl+Space** in any app for a floating input.
   Type, hit Enter, and it's on your list. Esc or clicking away closes it.
 
@@ -75,6 +79,6 @@ The feed is re-fetched every 5 minutes; the refresh button forces a fetch.
 | `src-tauri/src/appbar.rs` | Win32 `SHAppBarMessage` docking |
 | `src-tauri/src/calendar.rs` | ICS fetch, parse, and recurrence expansion |
 | `src-tauri/src/google.rs` | Google OAuth (PKCE + loopback) and Calendar API |
-| `src-tauri/src/store.rs` | Tasks + settings persistence |
+| `src-tauri/src/store.rs` | Outline items + settings persistence, task-marker parsing |
 | `src/main.ts`, `index.html` | Sidebar UI |
 | `src/capture.ts`, `capture.html` | Ctrl+Space capture popup |

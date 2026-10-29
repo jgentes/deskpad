@@ -1,13 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
-
-interface Task {
-  id: number;
-  text: string;
-  done: boolean;
-  created_at: number;
-}
+import { clearCompleted, loadItems } from "./outline";
 
 interface Meeting {
   id: string;
@@ -60,7 +54,7 @@ function fmtTime(ts: number) {
 }
 
 function relative(m: Meeting, now: number): { label: string; cls: string } {
-  if (m.all_day) return { label: "all day", cls: "" };
+  if (m.all_day) return { label: "", cls: "" };
   if (now >= m.start && now < m.end) {
     const left = Math.ceil((m.end - now) / 60);
     return { label: `now · ${left}m left`, cls: "now" };
@@ -81,11 +75,6 @@ function dayLabel(ts: number) {
   if (d.toDateString() === today.toDateString()) return "Today";
   if (d.toDateString() === tomorrow.toDateString()) return "Tomorrow";
   return d.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
-}
-
-function linkify(loc: string): string {
-  const esc = loc.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
-  return esc.replace(/https?:\/\/\S+/g, (u) => `<a href="${u}" data-ext>${u.replace(/^https?:\/\//, "")}</a>`);
 }
 
 function joinLabel(url: string): string {
@@ -123,12 +112,15 @@ function renderMeetings() {
     const rel = relative(m, now);
     const card = document.createElement("div");
     card.className = `meeting ${rel.cls}`;
-    const when = m.all_day ? "All day" : `${fmtTime(m.start)} – ${fmtTime(m.end)}`;
+    const when = m.all_day ? "all day" : fmtTime(m.start);
+    const range = m.all_day ? "All day" : `${fmtTime(m.start)} – ${fmtTime(m.end)}`;
+    const loc = m.location && !m.location.startsWith("http") ? `\n${m.location}` : "";
+    card.title = `${range}${loc}`;
     card.innerHTML = `
-      <div class="m-time"><span>${when}</span><span class="m-rel">${rel.label}</span></div>
-      <div class="m-title" title="${m.title.replace(/"/g, "&quot;")}"></div>
-      ${m.location && !m.location.startsWith("http") ? `<div class="m-loc">${linkify(m.location)}</div>` : ""}
-      ${m.url ? `<a class="m-join" href="${m.url.replace(/"/g, "&quot;")}" data-ext>${joinLabel(m.url)}</a>` : ""}
+      <span class="m-when">${when}</span>
+      <span class="m-title"></span>
+      <span class="m-rel">${rel.label}</span>
+      ${m.url ? `<a class="m-join" href="${m.url.replace(/"/g, "&quot;")}" data-ext title="${joinLabel(m.url)}"><svg viewBox="0 0 24 24"><path d="M15 3h6v6M21 3l-9 9M10 5H5v14h14v-5" /></svg></a>` : ""}
     `;
     card.querySelector(".m-title")!.textContent = m.title;
     frag.appendChild(card);
@@ -160,67 +152,6 @@ async function loadMeetings(force = false) {
   } finally {
     btn.classList.remove("spin");
   }
-}
-
-// ---------- tasks ----------
-
-async function loadTasks() {
-  const tasks = await invoke<Task[]>("list_tasks");
-  const el = $("#tasks");
-  const open = tasks.filter((t) => !t.done).length;
-  const done = tasks.length - open;
-  $("#task-count").textContent = open ? String(open) : "";
-  const clearBtn = $<HTMLButtonElement>("#btn-clear-done");
-  clearBtn.hidden = done === 0;
-  clearBtn.textContent = done === 1 ? "clear 1 completed" : `clear ${done} completed`;
-  if (tasks.length === 0) {
-    el.innerHTML = `<div class="empty">No tasks yet. Press <kbd>Ctrl</kbd>+<kbd>Space</kbd> anywhere to capture one.</div>`;
-    return;
-  }
-  const frag = document.createDocumentFragment();
-  const ordered = [...tasks.filter((t) => !t.done), ...tasks.filter((t) => t.done)];
-  for (const t of ordered) {
-    const row = document.createElement("div");
-    row.className = `task ${t.done ? "done" : ""}`;
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.checked = t.done;
-    cb.addEventListener("change", () => invoke("toggle_task", { id: t.id }));
-    const text = document.createElement("div");
-    text.className = "t-text";
-    text.textContent = t.text;
-    text.title = "Double-click to edit";
-    text.addEventListener("dblclick", () => editTask(row, text, t));
-    const del = document.createElement("button");
-    del.className = "t-del";
-    del.textContent = "✕";
-    del.title = "Delete";
-    del.addEventListener("click", () => invoke("delete_task", { id: t.id }));
-    row.append(cb, text, del);
-    frag.appendChild(row);
-  }
-  el.replaceChildren(frag);
-}
-
-function editTask(row: HTMLElement, textEl: HTMLElement, t: Task) {
-  const input = document.createElement("input");
-  input.className = "t-edit";
-  input.value = t.text;
-  row.replaceChild(input, textEl);
-  input.focus();
-  input.select();
-  const finish = async (save: boolean) => {
-    if (save && input.value.trim() && input.value.trim() !== t.text) {
-      await invoke("update_task", { id: t.id, text: input.value });
-    } else {
-      loadTasks();
-    }
-  };
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") finish(true);
-    if (e.key === "Escape") finish(false);
-  });
-  input.addEventListener("blur", () => finish(true));
 }
 
 // ---------- settings ----------
@@ -308,31 +239,13 @@ async function disconnectGoogle() {
 // ---------- boot ----------
 
 function wireUi() {
-  $("#task-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const input = $<HTMLInputElement>("#task-input");
-    const text = input.value.trim();
-    if (!text) return;
-    input.value = "";
-    try {
-      await invoke("add_task", { text });
-    } catch (err) {
-      console.error("add_task failed", err);
-      input.value = text;
-    }
-    loadTasks();
-  });
-
   $("#btn-capture").addEventListener("click", () => invoke("show_capture"));
   $("#btn-settings").addEventListener("click", openSettings);
   $("#btn-hide").addEventListener("click", () => invoke("hide_sidebar"));
   $("#btn-google-connect").addEventListener("click", connectGoogle);
   $("#btn-google-disconnect").addEventListener("click", disconnectGoogle);
   $("#btn-refresh").addEventListener("click", () => loadMeetings(true));
-  $("#btn-clear-done").addEventListener("click", async () => {
-    await invoke("clear_done");
-    loadTasks();
-  });
+  $("#btn-clear-done").addEventListener("click", clearCompleted);
   $("#settings-form").addEventListener("submit", saveSettings);
   $("#btn-settings-cancel").addEventListener("click", () => $("#settings").classList.add("hidden"));
   $("#btn-quit").addEventListener("click", () => invoke("quit"));
@@ -373,13 +286,13 @@ window.addEventListener("DOMContentLoaded", async () => {
     };
   }
 
-  loadTasks().catch((err) => console.error("loadTasks failed", err));
+  loadItems().catch((err) => console.error("loadItems failed", err));
   loadMeetings().catch((err) => console.error("loadMeetings failed", err));
 
   // Re-render relative times every 30s, refetch the feed every 5 min.
   setInterval(renderMeetings, 30_000);
   setInterval(() => loadMeetings(), 5 * 60_000);
 
-  listen("tasks-changed", () => loadTasks()).catch((err) => console.error("listen failed", err));
+  listen("items-changed", () => loadItems()).catch((err) => console.error("listen failed", err));
   listen("open-settings", () => openSettings()).catch((err) => console.error("listen failed", err));
 });

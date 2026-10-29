@@ -21,7 +21,7 @@ window.addEventListener("DOMContentLoaded", async () => {
       invoke("hide_capture");
       return;
     }
-    await invoke("add_task", { text });
+    await invoke("add_item", { text });
     input.value = "";
     flash.textContent = "Saved ✓";
     flash.classList.add("show");

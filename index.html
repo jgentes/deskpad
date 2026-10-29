@@ -15,7 +15,7 @@
         <div id="clock-date"></div>
       </div>
       <div class="bar-actions">
-        <button id="btn-capture" class="icon" title="Capture task (Ctrl+Space)" aria-label="Capture task">
+        <button id="btn-capture" class="icon" title="Quick capture (Ctrl+Space)" aria-label="Quick capture">
           <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>
         </button>
         <button id="btn-settings" class="icon" title="Settings" aria-label="Settings">
@@ -40,19 +40,16 @@
       <div id="meetings" class="list"></div>
     </section>
 
-    <section class="panel grow" id="tasks-panel">
+    <section class="panel grow" id="outline-panel">
       <div class="panel-head">
-        <h2>Tasks <span id="task-count" class="count"></span></h2>
+        <h2>Notes <span id="task-count" class="count" title="Open tasks"></span></h2>
         <button id="btn-clear-done" class="link" title="Remove completed tasks from the list" hidden>clear completed</button>
       </div>
-      <form id="task-form" class="task-form">
-        <input id="task-input" placeholder="Add a task…" autocomplete="off" />
-      </form>
-      <div id="tasks" class="list"></div>
+      <div id="outline" class="list outline"></div>
     </section>
 
     <footer class="hint">
-      <kbd>Ctrl</kbd> + <kbd>Space</kbd> captures from anywhere
+      <kbd>Tab</kbd> nest · <kbd>-</kbd> or <kbd>[]</kbd> task · <kbd>Ctrl</kbd>+<kbd>Space</kbd> capture
     </footer>
 
     <div id="settings" class="modal hidden">

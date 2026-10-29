@@ -7,7 +7,7 @@ use chrono::{Duration, Utc};
 use google::Google;
 use serde::Serialize;
 use std::sync::Mutex;
-use store::{Settings, Store, Task};
+use store::{Item, Settings, Store};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
@@ -31,67 +31,30 @@ struct CalCacheState(Mutex<Option<CalendarCache>>);
 #[derive(Default)]
 struct SidebarHidden(Mutex<bool>);
 
-// ---------- Tasks ----------
+// ---------- Items (notes & tasks) ----------
 
 #[tauri::command]
-fn list_tasks(store: State<Store>) -> Vec<Task> {
-    store.tasks.lock().unwrap().clone()
+fn list_items(store: State<Store>) -> Vec<Item> {
+    store.items.lock().unwrap().clone()
 }
 
+/// Replace the whole outline. The frontend owns ordering and nesting, so it
+/// sends the full list after every edit.
 #[tauri::command]
-fn add_task(app: AppHandle, store: State<Store>, text: String) -> Option<Task> {
-    let text = text.trim().to_string();
-    if text.is_empty() {
-        return None;
-    }
-    let task = Task {
-        id: Utc::now().timestamp_millis() as u64,
-        text,
-        done: false,
-        created_at: Utc::now().timestamp(),
-    };
-    store.tasks.lock().unwrap().insert(0, task.clone());
-    store.save_tasks();
-    app.emit("tasks-changed", ()).ok();
-    Some(task)
+fn set_items(store: State<Store>, items: Vec<Item>) {
+    *store.items.lock().unwrap() = items;
+    store.save_items();
 }
 
+/// Add a top-level item from raw text (used by the capture popup). Task markers
+/// in the text are honoured. Inserted at the top so a capture is visible at once.
 #[tauri::command]
-fn toggle_task(app: AppHandle, store: State<Store>, id: u64) {
-    {
-        let mut tasks = store.tasks.lock().unwrap();
-        if let Some(t) = tasks.iter_mut().find(|t| t.id == id) {
-            t.done = !t.done;
-        }
-    }
-    store.save_tasks();
-    app.emit("tasks-changed", ()).ok();
-}
-
-#[tauri::command]
-fn update_task(app: AppHandle, store: State<Store>, id: u64, text: String) {
-    {
-        let mut tasks = store.tasks.lock().unwrap();
-        if let Some(t) = tasks.iter_mut().find(|t| t.id == id) {
-            t.text = text.trim().to_string();
-        }
-    }
-    store.save_tasks();
-    app.emit("tasks-changed", ()).ok();
-}
-
-#[tauri::command]
-fn delete_task(app: AppHandle, store: State<Store>, id: u64) {
-    store.tasks.lock().unwrap().retain(|t| t.id != id);
-    store.save_tasks();
-    app.emit("tasks-changed", ()).ok();
-}
-
-#[tauri::command]
-fn clear_done(app: AppHandle, store: State<Store>) {
-    store.tasks.lock().unwrap().retain(|t| !t.done);
-    store.save_tasks();
-    app.emit("tasks-changed", ()).ok();
+fn add_item(app: AppHandle, store: State<Store>, text: String) -> Option<Item> {
+    let item = Item::from_text(&text, None)?;
+    store.items.lock().unwrap().insert(0, item.clone());
+    store.save_items();
+    app.emit("items-changed", ()).ok();
+    Some(item)
 }
 
 // ---------- Settings ----------
@@ -471,12 +434,9 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            list_tasks,
-            add_task,
-            toggle_task,
-            update_task,
-            delete_task,
-            clear_done,
+            list_items,
+            set_items,
+            add_item,
             get_settings,
             set_settings,
             get_meetings,

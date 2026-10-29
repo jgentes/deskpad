@@ -152,7 +152,7 @@ button.danger:hover {
   flex: 1;
 }
 #meetings-panel {
-  max-height: 46%;
+  max-height: 40%;
 }
 .panel-head {
   display: flex;
@@ -205,15 +205,19 @@ button.danger:hover {
   word-break: break-word;
 }
 
-/* ---------- meetings ---------- */
+/* ---------- meetings (compact rows) ---------- */
 .meeting {
-  background: var(--bg-2);
-  border-radius: var(--radius);
-  padding: 9px 11px;
-  border-left: 3px solid var(--bg-3);
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px 3px 8px;
+  border-radius: 6px;
+  border-left: 2px solid var(--bg-3);
+  font-size: 12.5px;
+  min-height: 24px;
+}
+.meeting:hover {
+  background: var(--bg-2);
 }
 .meeting.soon {
   border-left-color: var(--accent);
@@ -223,51 +227,72 @@ button.danger:hover {
   background: #1b2a22;
 }
 .meeting.past {
-  opacity: 0.45;
+  opacity: 0.4;
 }
-.meeting .m-time {
-  font-size: 12px;
+.meeting .m-when {
   color: var(--fg-2);
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
+  font-variant-numeric: tabular-nums;
+  width: 58px;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+.meeting .m-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .meeting .m-rel {
   color: var(--accent);
+  font-size: 11px;
   font-weight: 600;
+  white-space: nowrap;
 }
 .meeting.now .m-rel {
   color: var(--now);
 }
-.meeting .m-title {
-  font-weight: 600;
-  font-size: 13.5px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.meeting .m-loc {
-  font-size: 12px;
+.meeting.past .m-rel {
   color: var(--fg-3);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-weight: 400;
 }
-.meeting .m-loc a {
+.meeting .m-join {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
   color: var(--accent);
-  text-decoration: none;
+  flex-shrink: 0;
+}
+.meeting .m-join svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.meeting .m-join:hover {
+  background: rgba(108, 156, 255, 0.18);
+}
+.meeting.now .m-join {
+  color: var(--now);
 }
 .day-sep {
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--fg-3);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  margin: 6px 2px 0;
+  margin: 4px 2px 0;
+}
+#meetings-panel .list {
+  gap: 1px;
 }
 
-/* ---------- tasks ---------- */
-.task-form input,
-.modal input[type="text"],
+/* ---------- outline (notes & tasks) ---------- */
 .modal input:not([type="checkbox"]) {
   width: 100%;
   font: inherit;
@@ -278,65 +303,126 @@ button.danger:hover {
   padding: 8px 10px;
   outline: none;
 }
-.task-form input:focus,
 .modal input:focus {
   border-color: var(--accent-2);
 }
-.task-form {
-  margin-bottom: 8px;
+.outline {
+  gap: 0;
+  user-select: text;
 }
-.task {
+.row {
   display: flex;
   align-items: flex-start;
-  gap: 9px;
-  padding: 7px 8px;
-  border-radius: 8px;
+  gap: 6px;
+  padding: 2px 4px 2px 2px;
+  border-radius: 6px;
+  position: relative;
+}
+.row.child {
+  margin-left: 22px;
+}
+.row:hover,
+.row:focus-within {
   background: var(--bg-2);
 }
-.task:hover {
-  background: var(--bg-3);
-}
-.task input[type="checkbox"] {
-  margin: 3px 0 0;
-  width: 15px;
-  height: 15px;
-  accent-color: var(--accent);
+.row .mark {
   flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin-top: 3px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: var(--fg-3);
+  display: grid;
+  place-items: center;
   cursor: pointer;
 }
-.task .t-text {
-  flex: 1;
-  line-height: 1.35;
-  word-break: break-word;
-  cursor: text;
-  min-width: 0;
+.row.note .mark::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fg-3);
 }
-.task.done .t-text {
+.row.note .mark:hover::before {
+  background: var(--accent);
+}
+.row.task .mark {
+  width: 16px;
+  height: 16px;
+  margin: 4px 1px 0;
+  border-radius: 4px;
+  border: 1.5px solid var(--fg-3);
+}
+.row.task .mark svg {
+  width: 11px;
+  height: 11px;
+  fill: none;
+  stroke: var(--bg);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0;
+}
+.row.task .mark:hover {
+  border-color: var(--accent);
+}
+.row.task.done .mark {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.row.task.done .mark svg {
+  opacity: 1;
+}
+.row .txt {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.5;
+  padding: 1px 2px;
+  outline: none;
+  word-break: break-word;
+  white-space: pre-wrap;
+  cursor: text;
+}
+.row.done .txt {
   color: var(--fg-3);
   text-decoration: line-through;
 }
-.task .t-del {
+.row.new .txt:empty::before {
+  content: attr(data-placeholder);
+  color: var(--fg-3);
+}
+.row.new .mark::before {
+  background: var(--bg-3);
+}
+.row .del {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin-top: 3px;
+  padding: 0;
+  border: none;
   background: none;
   color: var(--fg-3);
-  padding: 0 4px;
+  display: grid;
+  place-items: center;
   opacity: 0;
-  line-height: 1.3;
 }
-.task:hover .t-del {
+.row .del svg {
+  width: 11px;
+  height: 11px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+}
+.row:hover .del {
   opacity: 1;
 }
-.task .t-del:hover {
+.row .del:hover {
   color: var(--danger);
-}
-.task .t-edit {
-  flex: 1;
-  font: inherit;
-  color: var(--fg);
-  background: var(--bg);
-  border: 1px solid var(--accent-2);
-  border-radius: 6px;
-  padding: 2px 6px;
-  outline: none;
 }
 
 /* ---------- footer ---------- */
@@ -492,25 +578,6 @@ button[disabled] {
   opacity: 0.6;
   cursor: wait;
 }
-.m-join {
-  display: inline-block;
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--accent);
-  text-decoration: none;
-  background: rgba(108, 156, 255, 0.12);
-  border-radius: 6px;
-  padding: 2px 8px;
-  align-self: flex-start;
-}
-.m-join:hover {
-  background: rgba(108, 156, 255, 0.25);
-}
-.meeting.now .m-join {
-  color: var(--now);
-  background: rgba(76, 210, 127, 0.14);
-}
-
 /* ---------- collapsed edge tab ---------- */
 body.tab {
   background: transparent;
