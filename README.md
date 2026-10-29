@@ -77,7 +77,7 @@ The feed is re-fetched every 5 minutes; the refresh button forces a fetch.
 cd D:\deskpad; npm run tauri build
 ```
 
-Produces two installers under `src-tauri	argeteleaseundle\`:
+Produces two installers under `src-tauri	argeteleasebundle`:
 
 - `nsis\Deskpad_<version>_x64-setup.exe` — per-user installer, no admin prompt (recommended)
 - `msi\Deskpad_<version>_x64_en-US.msi` — Windows Installer package
