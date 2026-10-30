@@ -14,6 +14,10 @@ export interface Item {
   created_at: number;
 }
 
+export interface ArchivedItem extends Item {
+  archived_at: number;
+}
+
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
 let items: Item[] = [];
@@ -89,6 +93,18 @@ async function flushSave() {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Move rows (and their children) to the archive; the backend owns the move. */
+async function archive(ids: number[]) {
+  if (!ids.length) return;
+  await flushSave();
+  try {
+    await invoke("archive_items", { ids });
+  } catch (err) {
+    console.error("archive_items failed", err);
+  }
+  await loadItems();
+}
 
 export async function loadItems() {
   let fetched: Item[] | null = null;
@@ -170,7 +186,8 @@ function render() {
   $("#task-count").textContent = open ? String(open) : "";
   const clearBtn = $<HTMLButtonElement>("#btn-clear-done");
   clearBtn.hidden = done === 0;
-  clearBtn.textContent = done === 1 ? "clear 1 completed" : `clear ${done} completed`;
+  clearBtn.textContent = done === 1 ? "archive 1 completed" : `archive ${done} completed`;
+  refreshArchiveLink();
 
   if (pendingFocus) {
     const target = pendingFocus.id === "new" ? el.querySelector<HTMLElement>(".row.new .txt") : el.querySelector<HTMLElement>(`.row[data-id="${pendingFocus.id}"] .txt`);
@@ -216,14 +233,11 @@ function renderRow(it: Item): HTMLElement {
   const del = document.createElement("button");
   del.className = "del";
   del.tabIndex = -1;
-  del.title = "Delete";
+  const kids = items.filter((c) => c.parent === it.id).length;
+  del.title = kids ? `Archive (with ${kids} nested)` : "Archive";
   del.innerHTML = `<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg>`;
   del.addEventListener("mousedown", (e) => e.preventDefault());
-  del.addEventListener("click", () => {
-    remove(it.id);
-    scheduleSave();
-    render();
-  });
+  del.addEventListener("click", () => archive([it.id]));
 
   row.append(mark, txt, del);
   return row;
@@ -368,9 +382,99 @@ function focusRow(id: number) {
 // ---------- public ----------
 
 export function clearCompleted() {
-  for (const it of items.filter((i) => i.kind === "task" && i.done)) remove(it.id);
-  scheduleSave();
-  render();
+  return archive(items.filter((i) => i.kind === "task" && i.done).map((i) => i.id));
+}
+
+// ---------- archive view ----------
+
+let archiveCount = 0;
+
+async function refreshArchiveLink() {
+  try {
+    archiveCount = (await invoke<ArchivedItem[]>("list_archive")).length;
+  } catch {
+    archiveCount = 0;
+  }
+  const link = $<HTMLButtonElement>("#btn-archive");
+  link.hidden = archiveCount === 0;
+  link.textContent = `archive ${archiveCount}`;
+}
+
+export async function openArchive() {
+  const modal = $("#archive");
+  const list = $("#archive-list");
+  modal.classList.remove("hidden");
+  list.innerHTML = `<div class="empty">Loading…</div>`;
+  let rows: ArchivedItem[] = [];
+  try {
+    rows = await invoke<ArchivedItem[]>("list_archive");
+  } catch (err) {
+    list.innerHTML = `<div class="error">Couldn't load archive: ${String(err)}</div>`;
+    return;
+  }
+  if (!rows.length) {
+    list.innerHTML = `<div class="empty">Nothing archived. Rows you ✕ and completed tasks you archive end up here.</div>`;
+    $<HTMLButtonElement>("#btn-archive-empty").hidden = true;
+    return;
+  }
+  $<HTMLButtonElement>("#btn-archive-empty").hidden = false;
+  // Newest first, children grouped under their parent when both are archived.
+  const byTime = [...rows].sort((a, b) => b.archived_at - a.archived_at || a.id - b.id);
+  const ids = new Set(rows.map((r) => r.id));
+  const ordered: ArchivedItem[] = [];
+  for (const r of byTime) {
+    if (r.parent !== null && ids.has(r.parent)) continue;
+    ordered.push(r, ...byTime.filter((c) => c.parent === r.id));
+  }
+  const frag = document.createDocumentFragment();
+  let lastDay = "";
+  for (const r of ordered) {
+    const day = new Date(r.archived_at * 1000).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+    if (day !== lastDay && !(r.parent !== null && ids.has(r.parent))) {
+      const sep = document.createElement("div");
+      sep.className = "day-sep";
+      sep.textContent = day;
+      frag.appendChild(sep);
+      lastDay = day;
+    }
+    const row = document.createElement("div");
+    row.className = `row arch ${r.kind}${r.done ? " done" : ""}${r.parent !== null && ids.has(r.parent) ? " child" : ""}`;
+    const mark = document.createElement("span");
+    mark.className = "mark";
+    if (r.kind === "task") mark.innerHTML = `<svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7" /></svg>`;
+    const txt = document.createElement("div");
+    txt.className = "txt";
+    txt.textContent = r.text || "(empty)";
+    const restore = document.createElement("button");
+    restore.className = "mini";
+    restore.title = "Restore to notes";
+    restore.innerHTML = `<svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 2.6-6.4" /><path d="M3 3v6h6" /></svg>`;
+    restore.addEventListener("click", async () => {
+      const group = [r.id, ...rows.filter((c) => c.parent === r.id).map((c) => c.id)];
+      await invoke("restore_items", { ids: group }).catch((err) => console.error("restore failed", err));
+      await loadItems();
+      openArchive();
+    });
+    const del = document.createElement("button");
+    del.className = "mini danger";
+    del.title = "Delete permanently";
+    del.innerHTML = `<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg>`;
+    del.addEventListener("click", async () => {
+      const group = [r.id, ...rows.filter((c) => c.parent === r.id).map((c) => c.id)];
+      await invoke("delete_archived", { ids: group }).catch((err) => console.error("delete failed", err));
+      refreshArchiveLink();
+      openArchive();
+    });
+    row.append(mark, txt, restore, del);
+    frag.appendChild(row);
+  }
+  list.replaceChildren(frag);
+}
+
+export async function emptyArchive() {
+  await invoke("delete_archived", { ids: [] }).catch((err) => console.error("delete failed", err));
+  refreshArchiveLink();
+  openArchive();
 }
 
 export function focusNewRow() {

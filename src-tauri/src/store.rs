@@ -102,9 +102,19 @@ impl Default for Settings {
     }
 }
 
+/// An outline row that was removed from the live list, kept so it can be
+/// restored. Children are archived together with their parent.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ArchivedItem {
+    #[serde(flatten)]
+    pub item: Item,
+    pub archived_at: i64,
+}
+
 pub struct Store {
     pub dir: PathBuf,
     pub items: Mutex<Vec<Item>>,
+    pub archive: Mutex<Vec<ArchivedItem>>,
     pub settings: Mutex<Settings>,
 }
 
@@ -112,8 +122,70 @@ impl Store {
     pub fn load(dir: PathBuf) -> Self {
         fs::create_dir_all(&dir).ok();
         let items = load_json(&dir.join("tasks.json")).unwrap_or_default();
+        let archive = load_json(&dir.join("archive.json")).unwrap_or_default();
         let settings = load_json(&dir.join("settings.json")).unwrap_or_default();
-        Self { dir, items: Mutex::new(items), settings: Mutex::new(settings) }
+        Self { dir, items: Mutex::new(items), archive: Mutex::new(archive), settings: Mutex::new(settings) }
+    }
+
+    pub fn save_archive(&self) {
+        let archive = self.archive.lock().unwrap();
+        if let Ok(json) = serde_json::to_string_pretty(&*archive) {
+            write_atomic(&self.dir.join("archive.json"), &json);
+        }
+    }
+
+    /// Move the given items, plus any children of them, from the outline to
+    /// the archive. Returns how many rows moved.
+    pub fn archive_items(&self, ids: &[u64]) -> usize {
+        let now = chrono::Utc::now().timestamp();
+        let mut items = self.items.lock().unwrap();
+        let mut archive = self.archive.lock().unwrap();
+        let doomed: Vec<Item> = items
+            .iter()
+            .filter(|i| ids.contains(&i.id) || i.parent.is_some_and(|p| ids.contains(&p)))
+            .cloned()
+            .collect();
+        items.retain(|i| !doomed.iter().any(|d| d.id == i.id));
+        let n = doomed.len();
+        archive.extend(doomed.into_iter().map(|item| ArchivedItem { item, archived_at: now }));
+        n
+    }
+
+    /// Move archived rows back to the end of the outline. A child whose parent
+    /// is not also coming back (or no longer in the outline) becomes top-level.
+    pub fn restore_items(&self, ids: &[u64]) {
+        let mut items = self.items.lock().unwrap();
+        let mut archive = self.archive.lock().unwrap();
+        let mut back: Vec<Item> = archive
+            .iter()
+            .filter(|a| ids.contains(&a.item.id))
+            .map(|a| a.item.clone())
+            .collect();
+        archive.retain(|a| !ids.contains(&a.item.id));
+        for i in back.iter_mut() {
+            if let Some(p) = i.parent {
+                let parent_known = items.iter().any(|x| x.id == p && x.parent.is_none())
+                    || ids.contains(&p);
+                if !parent_known {
+                    i.parent = None;
+                }
+            }
+            i.done = false;
+        }
+        // Parents first, then children right after their parent.
+        let parents: Vec<Item> = back.iter().filter(|i| i.parent.is_none()).cloned().collect();
+        for p in parents {
+            let pid = p.id;
+            items.push(p);
+            items.extend(back.iter().filter(|c| c.parent == Some(pid)).cloned());
+        }
+        for c in back.into_iter().filter(|c| c.parent.is_some()) {
+            if !items.iter().any(|x| x.id == c.id) {
+                let pid = c.parent.unwrap();
+                let at = items.iter().rposition(|x| x.id == pid || x.parent == Some(pid)).map(|i| i + 1).unwrap_or(items.len());
+                items.insert(at, c);
+            }
+        }
     }
 
     pub fn save_items(&self) {
@@ -192,7 +264,33 @@ pub fn backup_daily(path: &std::path::Path, backups: &std::path::Path) {
 
 #[cfg(test)]
 mod tests {
-    use super::{backup_daily, load_json, parse_marker, write_atomic};
+    use super::{backup_daily, load_json, parse_marker, write_atomic, Item, Store};
+
+    fn item(id: u64, parent: Option<u64>) -> Item {
+        Item { id, text: format!("item {id}"), kind: "note".into(), done: false, parent, created_at: 0 }
+    }
+
+    #[test]
+    fn archive_takes_children_and_restore_rebuilds_order() {
+        let dir = std::env::temp_dir().join(format!("deskpad-archive-{}", std::process::id()));
+        let store = Store::load(dir.clone());
+        *store.items.lock().unwrap() = vec![item(1, None), item(2, Some(1)), item(3, Some(1)), item(4, None)];
+        assert_eq!(store.archive_items(&[1]), 3);
+        assert_eq!(store.items.lock().unwrap().iter().map(|i| i.id).collect::<Vec<_>>(), vec![4]);
+        assert_eq!(store.archive.lock().unwrap().len(), 3);
+
+        // Restoring only a child makes it top-level.
+        store.restore_items(&[2]);
+        let ids: Vec<(u64, Option<u64>)> = store.items.lock().unwrap().iter().map(|i| (i.id, i.parent)).collect();
+        assert_eq!(ids, vec![(4, None), (2, None)]);
+
+        // Restoring the parent with its remaining child keeps them together.
+        store.restore_items(&[1, 3]);
+        let ids: Vec<(u64, Option<u64>)> = store.items.lock().unwrap().iter().map(|i| (i.id, i.parent)).collect();
+        assert_eq!(ids, vec![(4, None), (2, None), (1, None), (3, Some(1))]);
+        assert!(store.archive.lock().unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn corrupt_file_is_set_aside_not_overwritten() {

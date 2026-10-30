@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { clearCompleted, loadItems } from "./outline";
+import { clearCompleted, emptyArchive, loadItems, openArchive } from "./outline";
 
 interface Meeting {
   id: string;
@@ -248,7 +248,15 @@ function wireUi() {
   $("#btn-google-connect").addEventListener("click", connectGoogle);
   $("#btn-google-disconnect").addEventListener("click", disconnectGoogle);
   $("#btn-refresh").addEventListener("click", () => loadMeetings(true));
-  $("#btn-clear-done").addEventListener("click", clearCompleted);
+  $("#btn-clear-done").addEventListener("click", () => clearCompleted());
+  $("#btn-archive").addEventListener("click", () => openArchive());
+  $("#btn-archive-close").addEventListener("click", () => $("#archive").classList.add("hidden"));
+  $("#btn-archive-empty").addEventListener("click", () => {
+    if (confirm("Permanently delete everything in the archive?")) emptyArchive();
+  });
+  $("#archive").addEventListener("click", (e) => {
+    if (e.target === $("#archive")) $("#archive").classList.add("hidden");
+  });
   $("#settings-form").addEventListener("submit", saveSettings);
   $("#btn-settings-cancel").addEventListener("click", () => $("#settings").classList.add("hidden"));
   $("#btn-quit").addEventListener("click", () => invoke("quit"));
@@ -256,7 +264,10 @@ function wireUi() {
     if (e.target === $("#settings")) $("#settings").classList.add("hidden");
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") $("#settings").classList.add("hidden");
+    if (e.key === "Escape") {
+      $("#settings").classList.add("hidden");
+      $("#archive").classList.add("hidden");
+    }
   });
 }
 

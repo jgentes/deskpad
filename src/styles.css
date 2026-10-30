@@ -601,3 +601,67 @@ body.tab {
   background: var(--bg-3);
   color: var(--fg);
 }
+
+/* ---------- archive ---------- */
+.head-links {
+  display: flex;
+  gap: 2px;
+}
+.archive-card {
+  max-height: 80%;
+  padding: 12px 14px 14px;
+}
+.archive-card .list {
+  flex: 1;
+}
+.row.arch .txt {
+  cursor: default;
+  color: var(--fg-2);
+}
+.row.arch.done .txt {
+  text-decoration: line-through;
+  color: var(--fg-3);
+}
+.row.arch.task .mark {
+  cursor: default;
+}
+.row.arch.task .mark:hover {
+  border-color: var(--fg-3);
+}
+.row.arch.task.done .mark {
+  background: var(--fg-3);
+  border-color: var(--fg-3);
+}
+.row .mini {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--fg-3);
+  display: grid;
+  place-items: center;
+  opacity: 0;
+}
+.row:hover .mini {
+  opacity: 1;
+}
+.row .mini svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.row .mini:hover {
+  color: var(--accent);
+  background: var(--bg-3);
+}
+.row .mini.danger:hover {
+  color: var(--danger);
+}

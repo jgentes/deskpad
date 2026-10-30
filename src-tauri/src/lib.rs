@@ -7,7 +7,7 @@ use chrono::{Duration, Utc};
 use google::Google;
 use serde::Serialize;
 use std::sync::Mutex;
-use store::{Item, Settings, Store};
+use store::{ArchivedItem, Item, Settings, Store};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
@@ -44,6 +44,35 @@ fn list_items(store: State<Store>) -> Vec<Item> {
 fn set_items(store: State<Store>, items: Vec<Item>) {
     *store.items.lock().unwrap() = items;
     store.save_items();
+}
+
+#[tauri::command]
+fn list_archive(store: State<Store>) -> Vec<ArchivedItem> {
+    store.archive.lock().unwrap().clone()
+}
+
+/// Move items (and their children) to the archive.
+#[tauri::command]
+fn archive_items(app: AppHandle, store: State<Store>, ids: Vec<u64>) {
+    store.archive_items(&ids);
+    store.save_items();
+    store.save_archive();
+    app.emit("items-changed", ()).ok();
+}
+
+#[tauri::command]
+fn restore_items(app: AppHandle, store: State<Store>, ids: Vec<u64>) {
+    store.restore_items(&ids);
+    store.save_items();
+    store.save_archive();
+    app.emit("items-changed", ()).ok();
+}
+
+/// Permanently delete archived rows; an empty list clears the whole archive.
+#[tauri::command]
+fn delete_archived(store: State<Store>, ids: Vec<u64>) {
+    store.archive.lock().unwrap().retain(|a| !ids.is_empty() && !ids.contains(&a.item.id));
+    store.save_archive();
 }
 
 /// Add a top-level item from raw text (used by the capture popup). Task markers
@@ -460,6 +489,10 @@ pub fn run() {
             list_items,
             set_items,
             add_item,
+            list_archive,
+            archive_items,
+            restore_items,
+            delete_archived,
             get_settings,
             set_settings,
             get_meetings,

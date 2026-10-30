@@ -22,6 +22,9 @@ Built with [Tauri 2](https://tauri.app) (Rust backend, WebView2 frontend).
   **Tab** nests a row under the one above (one level), **Shift+Tab** un-nests,
   **Enter** splits or creates a row, **Backspace** on an empty row deletes it.
   Click a bullet to turn a note into a task; click a checkbox to complete it.
+  The row's ✕ and "archive N completed" move rows (with their nested children)
+  to an **archive** rather than deleting; open it from the Notes header to
+  restore or permanently delete entries.
 - **Global quick capture**: press **Ctrl+Space** in any app for a floating input.
   Type, hit Enter, and it's on your list. Esc or clicking away closes it.
 
@@ -93,6 +96,7 @@ Everything lives in `%APPDATA%\com.jgentes.deskpad\`:
 | File | Contents |
 |---|---|
 | `tasks.json` | the notes/tasks outline |
+| `archive.json` | archived rows, with the time they were archived |
 | `settings.json` | settings, including the Google OAuth client |
 | `google_tokens.json` | Google refresh token (delete to sign out) |
 | `backups\tasks-YYYY-MM-DD.json` | first copy of the outline seen each day, newest 30 kept |
