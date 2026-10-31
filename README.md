@@ -125,3 +125,7 @@ saves the outline until it has successfully loaded it from disk.
 | `src-tauri/src/store.rs` | Outline items + settings persistence, task-marker parsing |
 | `src/main.ts`, `index.html` | Sidebar UI |
 | `src/capture.ts`, `capture.html` | Ctrl+Space capture popup |
+
+## License
+
+MIT. See [LICENSE](LICENSE); the NSIS installer template is derived from Tauri (MIT/Apache-2.0).
