@@ -33,10 +33,36 @@
     <section class="panel" id="meetings-panel">
       <div class="panel-head">
         <h2>Up next</h2>
-        <button id="btn-refresh" class="icon small" title="Refresh calendar" aria-label="Refresh calendar">
-          <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4" /><path d="M21 3v6h-6" /></svg>
-        </button>
+        <div class="head-links">
+          <button id="btn-add-event" class="icon small" title="Add a calendar event" aria-label="Add a calendar event">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>
+          </button>
+          <button id="btn-refresh" class="icon small" title="Refresh calendar" aria-label="Refresh calendar">
+            <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4" /><path d="M21 3v6h-6" /></svg>
+          </button>
+        </div>
       </div>
+      <form id="event-form" class="event-form" hidden>
+        <input id="ev-title" placeholder="Event title" autocomplete="off" />
+        <div class="event-row">
+          <input id="ev-date" type="date" />
+          <input id="ev-time" type="time" step="300" />
+          <select id="ev-duration" title="Duration">
+            <option value="15">15 min</option>
+            <option value="30" selected>30 min</option>
+            <option value="45">45 min</option>
+            <option value="60">1 hour</option>
+            <option value="90">1.5 hours</option>
+            <option value="120">2 hours</option>
+          </select>
+        </div>
+        <div class="event-row">
+          <span id="ev-error" class="error"></span>
+          <span class="spacer"></span>
+          <button type="button" id="ev-cancel" class="link">cancel</button>
+          <button type="submit" class="primary small-btn">Add</button>
+        </div>
+      </form>
       <div id="meetings" class="list"></div>
     </section>
 

@@ -13,6 +13,7 @@ export default defineConfig(() => ({
         main: resolve(process.cwd(), "index.html"),
         capture: resolve(process.cwd(), "capture.html"),
         tab: resolve(process.cwd(), "tab.html"),
+        alert: resolve(process.cwd(), "alert.html"),
       },
     },
   },

@@ -188,6 +188,76 @@ fn google_status(google: State<Google>) -> bool {
     google.connected()
 }
 
+/// Whether events can be created (Google connected with the write scope).
+#[tauri::command]
+fn google_can_write(google: State<Google>) -> bool {
+    google.connected() && google.can_write()
+}
+
+/// Create an event on the primary Google calendar. `start` is unix seconds.
+#[tauri::command]
+async fn create_event(
+    store: State<'_, Store>,
+    google: State<'_, Google>,
+    title: String,
+    start: i64,
+    duration_min: i64,
+) -> Result<calendar::Meeting, String> {
+    if !google.connected() {
+        return Err("Connect Google Calendar in Settings to add events.".into());
+    }
+    let (id, secret) = {
+        let s = store.settings.lock().unwrap();
+        (s.google_client_id.clone(), s.google_client_secret.clone())
+    };
+    google
+        .create_event(&id, &secret, &title, start, start + duration_min.max(5) * 60)
+        .await
+}
+
+// ---------- Meeting alert (full-screen overlay) ----------
+
+#[derive(Clone, Serialize, serde::Deserialize)]
+struct AlertAction {
+    id: String,
+    action: String,
+    #[serde(default)]
+    minutes: u32,
+}
+
+/// Cover the monitor the sidebar is on with the alert window and hand it the
+/// meeting to display.
+#[tauri::command]
+fn show_alert(app: AppHandle, meeting: calendar::Meeting) {
+    let Some(alert) = app.get_webview_window("alert") else { return };
+    let monitor = app
+        .get_webview_window("main")
+        .and_then(|m| m.current_monitor().ok().flatten())
+        .or_else(|| alert.primary_monitor().ok().flatten());
+    if let Some(mon) = monitor {
+        alert.set_position(*mon.position()).ok();
+        alert.set_size(*mon.size()).ok();
+    }
+    alert.show().ok();
+    alert.set_always_on_top(true).ok();
+    alert.set_focus().ok();
+    app.emit_to("alert", "alert-show", meeting).ok();
+}
+
+#[tauri::command]
+fn hide_alert(app: AppHandle) {
+    if let Some(alert) = app.get_webview_window("alert") {
+        alert.hide().ok();
+    }
+}
+
+/// Called by the alert window; hides it and tells the sidebar what happened.
+#[tauri::command]
+fn alert_action(app: AppHandle, action: AlertAction) {
+    hide_alert(app.clone());
+    app.emit_to("main", "alert-action", action).ok();
+}
+
 #[tauri::command]
 async fn google_connect(
     app: AppHandle,
@@ -504,6 +574,11 @@ pub fn run() {
             set_settings,
             get_meetings,
             google_status,
+            google_can_write,
+            create_event,
+            show_alert,
+            hide_alert,
+            alert_action,
             google_connect,
             google_disconnect,
             hide_capture,

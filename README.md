@@ -25,6 +25,12 @@ Built with [Tauri 2](https://tauri.app) (Rust backend, WebView2 frontend).
   The row's ✕ and "archive N completed" move rows (with their nested children)
   to an **archive** rather than deleting; open it from the Notes header to
   restore or permanently delete entries.
+- **Add events** from the "+" in the Up next header (title, date, time, duration);
+  they land on your primary Google calendar. Requires the Calendar events scope,
+  so connections made before this feature need a disconnect/reconnect in Settings.
+- **Meeting alerts**: 2 minutes before a timed event starts, a full-screen overlay
+  covers the display with the title, countdown, Join (Meet/Zoom/Teams), Snooze
+  1 or 5 minutes, and Dismiss. Esc dismisses, Enter joins.
 - **Global quick capture**: press **Ctrl+Space** in any app for a floating input.
   Type, hit Enter, and it's on your list. Esc or clicking away closes it.
 

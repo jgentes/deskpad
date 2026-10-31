@@ -53,6 +53,20 @@
         "transparent": true,
         "shadow": false,
         "focus": false
+      },
+      {
+        "label": "alert",
+        "title": "Meeting alert",
+        "url": "alert.html",
+        "width": 800,
+        "height": 600,
+        "decorations": false,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "transparent": true,
+        "shadow": false
       }
     ],
     "security": {
@@ -61,7 +75,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi"],
+    "targets": [
+      "nsis",
+      "msi"
+    ],
     "windows": {
       "nsis": {
         "installMode": "currentUser"

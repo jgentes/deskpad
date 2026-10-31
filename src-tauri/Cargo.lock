@@ -778,6 +778,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "chrono-tz",
+ "iana-time-zone",
  "rand 0.8.8",
  "reqwest 0.12.28",
  "rrule",

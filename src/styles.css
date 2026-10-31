@@ -665,3 +665,146 @@ body.tab {
 .row .mini.danger:hover {
   color: var(--danger);
 }
+
+/* ---------- add event form ---------- */
+.event-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  margin-bottom: 6px;
+  background: var(--bg-2);
+  border-radius: 8px;
+}
+.event-form[hidden] {
+  display: none;
+}
+.event-form input,
+.event-form select {
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid #2c3039;
+  border-radius: 6px;
+  padding: 5px 8px;
+  outline: none;
+  min-width: 0;
+}
+.event-form input:focus,
+.event-form select:focus {
+  border-color: var(--accent-2);
+}
+.event-form #ev-title {
+  width: 100%;
+}
+.event-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.event-row #ev-date {
+  flex: 1.3;
+}
+.event-row #ev-time {
+  flex: 1;
+}
+.event-row #ev-duration {
+  flex: 1;
+}
+.event-row .error {
+  padding: 0;
+  font-size: 11.5px;
+}
+button.small-btn {
+  padding: 4px 12px;
+  font-size: 12.5px;
+}
+
+/* ---------- full-screen meeting alert ---------- */
+body.alert {
+  background: rgba(8, 10, 14, 0.9);
+  display: grid;
+  place-items: center;
+  user-select: none;
+}
+.alert-card {
+  width: min(560px, 90vw);
+  background: var(--bg-2);
+  border: 1px solid #3a3f4b;
+  border-radius: 18px;
+  padding: 32px 36px 24px;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.7);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  animation: alert-in 0.25s ease-out;
+}
+@keyframes alert-in {
+  from {
+    transform: translateY(12px) scale(0.98);
+    opacity: 0;
+  }
+}
+.alert-countdown {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.alert-countdown.now {
+  color: var(--now);
+}
+.alert-card h1 {
+  margin: 0;
+  font-size: 30px;
+  line-height: 1.2;
+  font-weight: 650;
+  word-break: break-word;
+}
+.alert-when {
+  color: var(--fg-2);
+  font-size: 16px;
+}
+.alert-loc {
+  color: var(--fg-3);
+  font-size: 13.5px;
+}
+.alert-loc[hidden] {
+  display: none;
+}
+.alert-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+button.big {
+  font-size: 15px;
+  padding: 11px 20px;
+  border-radius: 10px;
+}
+button.big.primary {
+  font-weight: 600;
+  padding-inline: 28px;
+}
+button.ghost {
+  background: none;
+  color: var(--fg-2);
+}
+button.ghost:hover {
+  background: var(--bg-3);
+  color: var(--fg);
+}
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.alert-hint {
+  margin-top: 8px;
+  color: var(--fg-3);
+  font-size: 11.5px;
+}

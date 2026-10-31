@@ -17,13 +17,19 @@ use std::time::Duration;
 
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-const SCOPE: &str = "https://www.googleapis.com/auth/calendar.readonly";
+/// Read all calendars, plus write access to events so Deskpad can add them.
+const SCOPE: &str = "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events";
+const WRITE_SCOPE: &str = "https://www.googleapis.com/auth/calendar.events";
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct Tokens {
     pub access_token: String,
     pub refresh_token: String,
     pub expires_at: i64,
+    /// Space-separated scopes Google actually granted. Older token files
+    /// predate this field and were read-only.
+    #[serde(default)]
+    pub scope: String,
 }
 
 pub struct Google {
@@ -37,6 +43,8 @@ struct TokenResponse {
     #[serde(default)]
     refresh_token: Option<String>,
     expires_in: i64,
+    #[serde(default)]
+    scope: Option<String>,
 }
 
 fn client() -> Result<reqwest::Client, String> {
@@ -95,6 +103,15 @@ impl Google {
 
     pub fn connected(&self) -> bool {
         self.tokens.lock().unwrap().as_ref().map(|t| !t.refresh_token.is_empty()).unwrap_or(false)
+    }
+
+    /// Whether the stored grant allows creating events.
+    pub fn can_write(&self) -> bool {
+        self.tokens
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|t| t.scope.split_whitespace().any(|s| s == WRITE_SCOPE))
     }
 
     fn save(&self, t: Option<Tokens>) {
@@ -233,6 +250,7 @@ impl Google {
             access_token: tr.access_token,
             refresh_token: refresh,
             expires_at: Utc::now().timestamp() + tr.expires_in - 60,
+            scope: tr.scope.unwrap_or_else(|| SCOPE.to_string()),
         }));
         Ok(())
     }
@@ -266,6 +284,7 @@ impl Google {
             access_token: tr.access_token.clone(),
             refresh_token: tr.refresh_token.unwrap_or(current.refresh_token),
             expires_at: Utc::now().timestamp() + tr.expires_in - 60,
+            scope: tr.scope.unwrap_or(current.scope),
         };
         self.save(Some(tokens));
         Ok(tr.access_token)
@@ -344,6 +363,62 @@ impl Google {
         out.sort_by_key(|m| (m.start, m.end));
         out.dedup_by(|a, b| a.id == b.id);
         Ok(out)
+    }
+
+    /// Create a timed event on the primary calendar. `start`/`end` are unix
+    /// seconds; they are sent in the machine's local time zone.
+    pub async fn create_event(
+        &self,
+        client_id: &str,
+        client_secret: &str,
+        title: &str,
+        start: i64,
+        end: i64,
+    ) -> Result<Meeting, String> {
+        if !self.can_write() {
+            return Err("Deskpad only has read access to your calendar. Disconnect and reconnect Google in Settings to allow adding events.".into());
+        }
+        let title = title.trim();
+        if title.is_empty() {
+            return Err("Give the event a title.".into());
+        }
+        if end <= start {
+            return Err("The event must end after it starts.".into());
+        }
+        let token = self.access_token(client_id, client_secret).await?;
+        let tz = iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".into());
+        let fmt = |t: i64| Local.timestamp_opt(t, 0).single().map(|d| d.to_rfc3339()).ok_or("bad time")
+            .map_err(|e: &str| e.to_string());
+        let body = serde_json::json!({
+            "summary": title,
+            "start": { "dateTime": fmt(start)?, "timeZone": tz },
+            "end": { "dateTime": fmt(end)?, "timeZone": tz },
+        });
+        let resp = client()?
+            .post("https://www.googleapis.com/calendar/v3/calendars/primary/events")
+            .bearer_auth(&token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            if status.as_u16() == 403 {
+                return Err("Google refused: Deskpad lacks permission to add events. Disconnect and reconnect Google in Settings.".into());
+            }
+            return Err(format!("Google rejected the event ({status}): {text}"));
+        }
+        let ev: Event = resp.json().await.map_err(|e| e.to_string())?;
+        Ok(Meeting {
+            id: format!("g:{}", ev.id),
+            title: ev.summary.unwrap_or_else(|| title.to_string()),
+            start,
+            end,
+            all_day: false,
+            location: ev.location,
+            url: ev.hangout_link.or(ev.html_link),
+        })
     }
 }
 

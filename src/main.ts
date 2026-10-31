@@ -148,11 +148,102 @@ async function loadMeetings(force = false) {
     meetings = result.meetings;
     $("#meetings-panel h2").textContent = result.source === "google" ? "Up next · Google" : "Up next";
     renderMeetings();
+    checkAlerts();
   } catch (err) {
     $("#meetings").innerHTML = `<div class="error">Couldn't load calendar: ${String(err)}</div>`;
   } finally {
     btn.classList.remove("spin");
   }
+}
+
+// ---------- add event ----------
+
+function toggleEventForm(open?: boolean) {
+  const form = $<HTMLFormElement>("#event-form");
+  const show = open ?? form.hidden;
+  form.hidden = !show;
+  if (!show) return;
+  $("#ev-error").textContent = googleConnected ? "" : "Connect Google Calendar in Settings to add events.";
+  const now = new Date(Date.now() + 15 * 60_000);
+  now.setMinutes(Math.ceil(now.getMinutes() / 15) * 15, 0, 0);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  $<HTMLInputElement>("#ev-date").value = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  $<HTMLInputElement>("#ev-time").value = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  $<HTMLInputElement>("#ev-title").value = "";
+  $<HTMLInputElement>("#ev-title").focus();
+}
+
+async function submitEvent(e: Event) {
+  e.preventDefault();
+  const errEl = $("#ev-error");
+  const title = $<HTMLInputElement>("#ev-title").value.trim();
+  const date = $<HTMLInputElement>("#ev-date").value;
+  const time = $<HTMLInputElement>("#ev-time").value;
+  const duration = Number($<HTMLSelectElement>("#ev-duration").value);
+  if (!title) return void (errEl.textContent = "Give the event a title.");
+  if (!date || !time) return void (errEl.textContent = "Pick a date and time.");
+  const start = Math.floor(new Date(`${date}T${time}`).getTime() / 1000);
+  const btn = $<HTMLButtonElement>("#event-form button[type=submit]");
+  btn.disabled = true;
+  errEl.textContent = "";
+  try {
+    const created = await invoke<Meeting>("create_event", { title, start, durationMin: duration });
+    meetings = [...meetings, created].sort((a, b) => a.start - b.start || a.end - b.end);
+    renderMeetings();
+    toggleEventForm(false);
+    loadMeetings(true);
+  } catch (err) {
+    errEl.textContent = String(err);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ---------- meeting alerts ----------
+
+/** Seconds before the start at which the full-screen alert appears. */
+const ALERT_LEAD = 2 * 60;
+/** Don't alert for something that started more than this long ago. */
+const ALERT_GRACE = 5 * 60;
+
+interface AlertState {
+  shown: boolean;
+  dismissed: boolean;
+  snoozedUntil: number;
+}
+const alerts = new Map<string, AlertState>();
+
+function checkAlerts() {
+  const now = Math.floor(Date.now() / 1000);
+  const dueNow = meetings.filter(
+    (m) => !m.all_day && now >= m.start - ALERT_LEAD && now < Math.min(m.end, m.start + ALERT_GRACE),
+  );
+  for (const m of dueNow) {
+    const st = alerts.get(m.id) ?? { shown: false, dismissed: false, snoozedUntil: 0 };
+    if (st.dismissed || st.shown || st.snoozedUntil > now) continue;
+    st.shown = true;
+    alerts.set(m.id, st);
+    invoke("show_alert", { meeting: m }).catch((err) => {
+      console.error("show_alert failed", err);
+      st.shown = false;
+    });
+    break; // one alert at a time; the next shows after this one is handled
+  }
+  // Forget state for meetings that are long gone.
+  for (const [id, st] of alerts) {
+    const m = meetings.find((x) => x.id === id);
+    if (!m || now > m.end + 3600) {
+      if (!st.shown) alerts.delete(id);
+    }
+  }
+}
+
+function onAlertAction(a: { id: string; action: string; minutes: number }) {
+  const st = alerts.get(a.id) ?? { shown: false, dismissed: false, snoozedUntil: 0 };
+  st.shown = false;
+  if (a.action === "dismiss") st.dismissed = true;
+  else if (a.action === "snooze") st.snoozedUntil = Math.floor(Date.now() / 1000) + Math.max(1, a.minutes) * 60;
+  alerts.set(a.id, st);
 }
 
 // ---------- settings ----------
@@ -248,6 +339,9 @@ function wireUi() {
   $("#btn-google-connect").addEventListener("click", connectGoogle);
   $("#btn-google-disconnect").addEventListener("click", disconnectGoogle);
   $("#btn-refresh").addEventListener("click", () => loadMeetings(true));
+  $("#btn-add-event").addEventListener("click", () => toggleEventForm());
+  $("#ev-cancel").addEventListener("click", () => toggleEventForm(false));
+  $("#event-form").addEventListener("submit", submitEvent);
   $("#btn-clear-done").addEventListener("click", () => clearCompleted());
   $("#btn-archive").addEventListener("click", () => openArchive());
   $("#btn-archive-close").addEventListener("click", () => $("#archive").classList.add("hidden"));
@@ -267,6 +361,7 @@ function wireUi() {
     if (e.key === "Escape") {
       $("#settings").classList.add("hidden");
       $("#archive").classList.add("hidden");
+      toggleEventForm(false);
     }
   });
 }
@@ -306,10 +401,15 @@ window.addEventListener("DOMContentLoaded", async () => {
   loadItems().catch((err) => console.error("loadItems failed", err));
   loadMeetings().catch((err) => console.error("loadMeetings failed", err));
 
-  // Re-render relative times every 30s, refetch the feed every 5 min.
+  // Re-render relative times every 30s, refetch the feed every 5 min,
+  // check for meetings about to start every 5s.
   setInterval(renderMeetings, 30_000);
+  setInterval(checkAlerts, 5_000);
   setInterval(() => loadMeetings(), 5 * 60_000);
 
   listen("items-changed", () => loadItems()).catch((err) => console.error("listen failed", err));
   listen("open-settings", () => openSettings()).catch((err) => console.error("listen failed", err));
+  listen<{ id: string; action: string; minutes: number }>("alert-action", (e) => onAlertAction(e.payload)).catch((err) =>
+    console.error("listen failed", err),
+  );
 });

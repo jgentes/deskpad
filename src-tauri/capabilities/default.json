@@ -1,8 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the sidebar and capture windows",
-  "windows": ["main", "capture", "tab"],
+  "description": "Capability for the sidebar, capture, edge tab and alert windows",
+  "windows": [
+    "main",
+    "capture",
+    "tab",
+    "alert"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
