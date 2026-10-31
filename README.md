@@ -86,14 +86,17 @@ The feed is re-fetched every 5 minutes; the refresh button forces a fetch.
 cd D:\deskpad; npm run tauri build
 ```
 
-Produces two installers under `src-tauri/target/release/bundle/`:
+Produces a one-click installer at
+`src-tauri/target/release/bundle/nsis/Deskpad_<version>_x64-setup.exe`.
+Double-click it and it installs per user with no wizard, no admin prompt and no
+shortcut/launch questions: it closes a running Deskpad, copies the new build
+and relaunches it. This comes from `src-tauri/nsis/installer.nsi`, a copy of
+Tauri's stock NSIS template with passive mode and relaunch forced on (see the
+header comment there; re-copy it when upgrading `@tauri-apps/cli`).
 
-- `nsis\Deskpad_<version>_x64-setup.exe` — per-user installer, no admin prompt (recommended)
-- `msi\Deskpad_<version>_x64_en-US.msi` — Windows Installer package
-
-Bump `version` in `src-tauri/tauri.conf.json` before building a new release; the
-installer upgrades in place. The installed app and the dev build share the same
-data folder, so notes and settings carry over.
+Bump `version` in `src-tauri/tauri.conf.json` before building a new release.
+The installed app and the dev build share the same data folder, so notes and
+settings carry over.
 
 ## Your data
 
