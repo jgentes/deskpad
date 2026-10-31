@@ -94,6 +94,13 @@ fn get_settings(store: State<Store>) -> Settings {
 }
 
 fn apply_autostart(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    // A dev build must never register itself: the Run entry would point at
+    // target\debug\deskpad.exe, which needs the Vite server and shows a console.
+    // The installed release build re-applies the entry on every launch.
+    if cfg!(debug_assertions) {
+        eprintln!("[autostart] skipped in debug build (would be {enabled})");
+        return Ok(());
+    }
     let al = app.autolaunch();
     if enabled { al.enable() } else { al.disable() }.map_err(|e| e.to_string())
 }
