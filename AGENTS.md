@@ -2,7 +2,7 @@
 
 Deskpad is a Windows 11 sidebar built with **Tauri 2** (Rust backend, vanilla
 TypeScript + Vite frontend). It docks to the right screen edge as a Win32
-AppBar, shows upcoming meetings (Google Calendar or an ICS feed), keeps a
+AppBar, shows today's Google Calendar events (with tomorrow's early ones), keeps a
 Workflowy-style outline of notes and tasks, captures notes from anywhere with
 Ctrl+Space, and throws a full-screen alert two minutes before a meeting.
 
@@ -13,7 +13,7 @@ Ctrl+Space, and throws a full-screen alert two minutes before a meeting.
 | `src-tauri/src/lib.rs` | Tauri commands, window setup, tray, global shortcut, alert window |
 | `src-tauri/src/appbar.rs` | Win32 `SHAppBarMessage` docking and native hide/show |
 | `src-tauri/src/store.rs` | `Item`/`Settings` persistence, task-marker parsing, archive, atomic writes, backups |
-| `src-tauri/src/calendar.rs` | ICS fetch, parse, recurrence expansion |
+| `src-tauri/src/calendar.rs` | The shared `Meeting` type (ICS support was removed; Google only) |
 | `src-tauri/src/google.rs` | Google OAuth (PKCE + loopback), Calendar read, event creation |
 | `src-tauri/nsis/installer.nsi` | Custom NSIS installer template (see below) |
 | `src/main.ts` | Sidebar: clock, meetings, add-event form, alert scheduler, settings |
@@ -33,8 +33,7 @@ also be listed in `src-tauri/capabilities/default.json`.
   side on change. **Only one Deskpad can run at a time**: a second instance
   fights the first for the right edge and the Ctrl+Space shortcut. Quit the
   installed app from its tray icon before running dev, and vice versa.
-- Checks: `cargo test` in `src-tauri` (calendar, marker parsing, store safety,
-  archive), `npx tsc --noEmit -p .` and `npx vite build` at the root.
+- Checks: `cargo test` in `src-tauri` (marker parsing, store safety, archive), `npx tsc --noEmit -p .` and `npx vite build` at the root.
 - UI changes can be exercised without the native app by opening
   `http://localhost:1420/` in a browser and installing a mock
   `window.__TAURI_INTERNALS__` whose `invoke` implements the commands the page
@@ -114,6 +113,10 @@ Bump `version` in `src-tauri/tauri.conf.json` for each release.
   Tokens record the granted scope; `can_write()` gates event creation and a
   read-only grant produces a "disconnect and reconnect" message.
 - Alert timing lives in `main.ts` (`ALERT_LEAD` = 120 s, `ALERT_GRACE` = 300 s).
+- Calendar windows are chosen by the frontend: `get_meetings(from, to)` takes
+  unix seconds, and `main.ts` always keeps today + tomorrow loaded (`meetings`,
+  which drives alerts) plus the browsed day (`dayMeetings`) when it is another
+  one. `tomorrow_until_hour` replaced the old rolling look-ahead.
 - Fold state (which parents are collapsed) is a view preference kept in
   `localStorage` (`deskpad.collapsed`), never in `tasks.json`. The archive view
   always opens with every parent folded.

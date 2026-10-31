@@ -3,7 +3,7 @@ mod calendar;
 mod google;
 mod store;
 
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Utc};
 use google::Google;
 use serde::Serialize;
 use std::sync::Mutex;
@@ -18,15 +18,6 @@ use tauri_plugin_opener::OpenerExt;
 const CAPTURE_SHORTCUT: &str = "ctrl+space";
 
 /// Cached ICS text so the UI can refresh often without hammering the feed.
-struct CalendarCache {
-    text: String,
-    fetched_at: i64,
-    url: String,
-}
-
-#[derive(Default)]
-struct CalCacheState(Mutex<Option<CalendarCache>>);
-
 /// Whether the sidebar is currently hidden via the tray.
 #[derive(Default)]
 struct SidebarHidden(Mutex<bool>);
@@ -113,9 +104,6 @@ fn set_settings(app: AppHandle, store: State<Store>, settings: Settings) -> Resu
         let mut s = store.settings.lock().unwrap();
         layout_changed = s.width != settings.width || s.reserve_space != settings.reserve_space;
         autostart_changed = s.autostart != settings.autostart;
-        if s.ics_url != settings.ics_url {
-            *app.state::<CalCacheState>().0.lock().unwrap() = None;
-        }
         *s = settings.clone();
     }
     store.save_settings();
@@ -140,47 +128,28 @@ struct MeetingsResult {
     meetings: Vec<calendar::Meeting>,
 }
 
+/// Events between two unix timestamps. The frontend picks the window (it knows
+/// the local day boundaries); the backend just fetches it.
 #[tauri::command]
 async fn get_meetings(
     store: State<'_, Store>,
-    cache: State<'_, CalCacheState>,
     google: State<'_, Google>,
-    force: bool,
+    from: i64,
+    to: i64,
 ) -> Result<MeetingsResult, String> {
-    let settings = store.settings.lock().unwrap().clone();
-    let now = Utc::now();
-    let to = now + Duration::hours(settings.lookahead_hours as i64);
-
-    if google.connected() {
-        let meetings = google
-            .meetings(&settings.google_client_id, &settings.google_client_secret, now, to)
-            .await?;
-        return Ok(MeetingsResult { source: "google", meetings });
-    }
-
-    let url = settings.ics_url.trim().to_string();
-    if url.is_empty() {
+    if !google.connected() {
         return Ok(MeetingsResult { source: "none", meetings: vec![] });
     }
-    let cached = {
-        let c = cache.0.lock().unwrap();
-        c.as_ref()
-            .filter(|c| c.url == url && !force && now.timestamp() - c.fetched_at < 5 * 60)
-            .map(|c| c.text.clone())
-    };
-    let text = match cached {
-        Some(t) => t,
-        None => {
-            let t = calendar::fetch(&url).await?;
-            *cache.0.lock().unwrap() = Some(CalendarCache {
-                text: t.clone(),
-                fetched_at: now.timestamp(),
-                url: url.clone(),
-            });
-            t
-        }
-    };
-    Ok(MeetingsResult { source: "ics", meetings: calendar::expand(&text, now, to) })
+    if to <= from {
+        return Err("invalid time range".into());
+    }
+    let settings = store.settings.lock().unwrap().clone();
+    let from = DateTime::<Utc>::from_timestamp(from, 0).ok_or("invalid start time")?;
+    let to = DateTime::<Utc>::from_timestamp(to, 0).ok_or("invalid end time")?;
+    let meetings = google
+        .meetings(&settings.google_client_id, &settings.google_client_secret, from, to)
+        .await?;
+    Ok(MeetingsResult { source: "google", meetings })
 }
 
 #[tauri::command]
@@ -556,7 +525,6 @@ pub fn run() {
                 })
                 .build(),
         )
-        .manage(CalCacheState::default())
         .manage(SidebarHidden::default())
         .manage(store)
         .manage(google)

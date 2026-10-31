@@ -32,7 +32,16 @@
 
     <section class="panel" id="meetings-panel">
       <div class="panel-head">
-        <h2>Up next</h2>
+        <div class="cal-nav">
+          <button id="btn-prev-day" class="icon small" title="Previous day" aria-label="Previous day">
+            <svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6" /></svg>
+          </button>
+          <h2 id="cal-title">Today</h2>
+          <button id="btn-next-day" class="icon small" title="Next day" aria-label="Next day">
+            <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" /></svg>
+          </button>
+          <button id="btn-today" class="link" hidden>today</button>
+        </div>
         <div class="head-links">
           <button id="btn-add-event" class="icon small" title="Add a calendar event" aria-label="Add a calendar event">
             <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>
@@ -126,16 +135,9 @@
         </fieldset>
 
         <label>
-          Calendar feed URL (.ics) <small>(used when Google is not connected)</small>
-          <input id="s-ics" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics" />
-          <small>
-            Google Calendar: Settings → your calendar → “Secret address in iCal format”.
-            Outlook: Settings → Calendar → Shared calendars → Publish → ICS link.
-          </small>
-        </label>
-        <label>
-          Look ahead (hours)
-          <input id="s-lookahead" type="number" min="1" max="336" />
+          Show tomorrow's events that start before
+          <select id="s-tomorrow"></select>
+          <small>The Today view calls out early meetings tomorrow so they don't surprise you.</small>
         </label>
         <label class="check">
           <input id="s-allday" type="checkbox" />

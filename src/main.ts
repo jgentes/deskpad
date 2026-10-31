@@ -14,27 +14,51 @@ interface Meeting {
 }
 
 interface Settings {
-  ics_url: string;
   google_client_id: string;
   google_client_secret: string;
   always_on_top: boolean;
   reserve_space: boolean;
   autostart: boolean;
   width: number;
-  lookahead_hours: number;
+  /** Today view also lists tomorrow's events starting before this hour (0 = off, 24 = all). */
+  tomorrow_until_hour: number;
   show_all_day: boolean;
 }
 
 interface MeetingsResult {
-  source: "google" | "ics" | "none";
+  source: "google" | "none";
   meetings: Meeting[];
 }
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
 let settings: Settings;
+/** Today + tomorrow, refreshed every 5 min. Drives the Today view and the alerts. */
 let meetings: Meeting[] = [];
+/** Events for the day being browsed when it isn't today. */
+let dayMeetings: Meeting[] = [];
+/** 0 = today, -1 = yesterday, 1 = tomorrow, ... */
+let dayOffset = 0;
 let googleConnected = false;
+
+/** Local time (unix seconds) at `hour` o'clock on today plus `offset` days.
+ *  Goes through Date so DST-change days (23 or 25 hours) come out right. */
+function atHour(offset: number, hour: number): number {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + offset);
+  d.setHours(hour);
+  return Math.floor(d.getTime() / 1000);
+}
+
+/** Local midnight (unix seconds) of today plus `offset` days. */
+const dayStart = (offset: number) => atHour(offset, 0);
+
+function fmtHour(h: number): string {
+  const d = new Date();
+  d.setHours(h, 0, 0, 0);
+  return d.toLocaleTimeString([], { hour: "numeric" });
+}
 
 // ---------- clock ----------
 
@@ -68,14 +92,11 @@ function relative(m: Meeting, now: number): { label: string; cls: string } {
   return { label: "", cls: "" };
 }
 
-function dayLabel(ts: number) {
-  const d = new Date(ts * 1000);
-  const today = new Date();
-  const tomorrow = new Date();
-  tomorrow.setDate(today.getDate() + 1);
-  if (d.toDateString() === today.toDateString()) return "Today";
-  if (d.toDateString() === tomorrow.toDateString()) return "Tomorrow";
-  return d.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
+function dayLabel(offset: number) {
+  if (offset === 0) return "Today";
+  if (offset === 1) return "Tomorrow";
+  if (offset === -1) return "Yesterday";
+  return new Date(dayStart(offset) * 1000).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
 }
 
 function joinLabel(url: string): string {
@@ -86,33 +107,75 @@ function joinLabel(url: string): string {
   return "Join";
 }
 
+/** Events that overlap the local day today + `offset`, honouring the all-day setting. */
+function eventsOn(list: Meeting[], offset: number): Meeting[] {
+  const start = dayStart(offset);
+  const end = dayStart(offset + 1);
+  return list.filter((m) => m.start < end && m.end > start && (settings.show_all_day || !m.all_day));
+}
+
+function renderCalHeader() {
+  $("#cal-title").textContent = dayLabel(dayOffset);
+  $("#cal-title").classList.toggle("other-day", dayOffset !== 0);
+  $<HTMLButtonElement>("#btn-today").hidden = dayOffset === 0;
+}
+
 function renderMeetings() {
   const el = $("#meetings");
   const now = Math.floor(Date.now() / 1000);
-  if (!settings?.ics_url && !googleConnected) {
-    el.innerHTML = `<div class="empty">No calendar connected. <a id="link-settings">Connect Google Calendar or an .ics feed</a> to see upcoming meetings.</div>`;
+  renderCalHeader();
+  if (!googleConnected) {
+    el.innerHTML = `<div class="empty">No calendar connected. <a id="link-settings">Connect Google Calendar</a> to see your day.</div>`;
     el.querySelector("#link-settings")?.addEventListener("click", openSettings);
     return;
   }
-  const upcoming = meetings.filter((m) => m.end > now - 15 * 60 && (settings.show_all_day || !m.all_day));
-  if (upcoming.length === 0) {
-    el.innerHTML = `<div class="empty">Nothing scheduled in the next ${settings.lookahead_hours}h.</div>`;
-    return;
-  }
   const frag = document.createDocumentFragment();
-  let lastDay = "";
-  for (const m of upcoming) {
-    const day = dayLabel(m.start);
-    if (day !== lastDay) {
-      const sep = document.createElement("div");
-      sep.className = "day-sep";
-      sep.textContent = day;
-      frag.appendChild(sep);
-      lastDay = day;
+  if (dayOffset === 0) {
+    const today = eventsOn(meetings, 0);
+    if (today.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = "No events today.";
+      frag.appendChild(empty);
     }
+    for (const m of today) frag.appendChild(renderMeeting(m, now, false));
+
+    // Early tomorrow, so a first-thing meeting is never a surprise.
+    const until = settings.tomorrow_until_hour;
+    if (until > 0) {
+      const cutoff = atHour(1, until);
+      const early = eventsOn(meetings, 1).filter((m) => m.start < cutoff);
+      if (early.length) {
+        const sep = document.createElement("div");
+        sep.className = "day-sep tomorrow";
+        sep.textContent = until >= 24 ? "Tomorrow" : `Tomorrow · before ${fmtHour(until)}`;
+        frag.appendChild(sep);
+        for (const m of early) frag.appendChild(renderMeeting(m, now, true));
+      }
+    }
+  } else {
+    const list = eventsOn(dayMeetings, dayOffset);
+    if (list.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = dayOffset === 1 ? "No events tomorrow." : dayOffset === -1 ? "No events yesterday." : `No events on ${dayLabel(dayOffset)}.`;
+      frag.appendChild(empty);
+    }
+    for (const m of list) frag.appendChild(renderMeeting(m, now, false));
+  }
+  el.replaceChildren(frag);
+  el.querySelectorAll<HTMLAnchorElement>("a[data-ext]").forEach((a) =>
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      openUrl(a.href);
+    }),
+  );
+}
+
+function renderMeeting(m: Meeting, now: number, nextDay: boolean): HTMLElement {
     const rel = relative(m, now);
     const card = document.createElement("div");
-    card.className = `meeting ${rel.cls}`;
+    card.className = `meeting ${rel.cls}${nextDay ? " next-day" : ""}`;
     const when = m.all_day ? "all day" : fmtTime(m.start);
     const range = m.all_day ? "All day" : `${fmtTime(m.start)} – ${fmtTime(m.end)}`;
     const loc = m.location && !m.location.startsWith("http") ? `\n${m.location}` : "";
@@ -124,35 +187,55 @@ function renderMeetings() {
       ${m.url ? `<a class="m-join" href="${m.url.replace(/"/g, "&quot;")}" data-ext title="${joinLabel(m.url)}"><svg viewBox="0 0 24 24"><path d="M15 3h6v6M21 3l-9 9M10 5H5v14h14v-5" /></svg></a>` : ""}
     `;
     card.querySelector(".m-title")!.textContent = m.title;
-    frag.appendChild(card);
-  }
-  el.replaceChildren(frag);
-  el.querySelectorAll<HTMLAnchorElement>("a[data-ext]").forEach((a) =>
-    a.addEventListener("click", (e) => {
-      e.preventDefault();
-      openUrl(a.href);
-    }),
-  );
+    return card;
 }
 
-async function loadMeetings(force = false) {
-  if (!settings?.ics_url && !googleConnected) {
+/** Fetch today + tomorrow (alerts and the Today view), plus the browsed day if it's another one. */
+async function loadMeetings(_force = false) {
+  if (!googleConnected) {
     meetings = [];
+    dayMeetings = [];
     renderMeetings();
     return;
   }
   const btn = $("#btn-refresh");
   btn.classList.add("spin");
   try {
-    const result = await invoke<MeetingsResult>("get_meetings", { force });
-    meetings = result.meetings;
-    $("#meetings-panel h2").textContent = result.source === "google" ? "Up next · Google" : "Up next";
+    const base = invoke<MeetingsResult>("get_meetings", { from: dayStart(0), to: dayStart(2) });
+    const extra =
+      dayOffset === 0 ? null : invoke<MeetingsResult>("get_meetings", { from: dayStart(dayOffset), to: dayStart(dayOffset + 1) });
+    const [b, e] = await Promise.all([base, extra]);
+    meetings = b.meetings;
+    if (e) dayMeetings = e.meetings;
     renderMeetings();
     checkAlerts();
   } catch (err) {
     $("#meetings").innerHTML = `<div class="error">Couldn't load calendar: ${String(err)}</div>`;
   } finally {
     btn.classList.remove("spin");
+  }
+}
+
+let dayLoadSeq = 0;
+
+/** Browse another day; a quick succession of clicks only fetches the last one. */
+async function showDay(offset: number) {
+  dayOffset = offset;
+  renderCalHeader();
+  if (offset === 0 || !googleConnected) {
+    renderMeetings();
+    return;
+  }
+  const seq = ++dayLoadSeq;
+  $("#meetings").innerHTML = `<div class="empty">Loading…</div>`;
+  try {
+    const r = await invoke<MeetingsResult>("get_meetings", { from: dayStart(offset), to: dayStart(offset + 1) });
+    if (seq !== dayLoadSeq) return;
+    dayMeetings = r.meetings;
+    renderMeetings();
+  } catch (err) {
+    if (seq !== dayLoadSeq) return;
+    $("#meetings").innerHTML = `<div class="error">Couldn't load calendar: ${String(err)}</div>`;
   }
 }
 
@@ -166,6 +249,7 @@ function toggleEventForm(open?: boolean) {
   $("#ev-error").textContent = googleConnected ? "" : "Connect Google Calendar in Settings to add events.";
   const now = new Date(Date.now() + 15 * 60_000);
   now.setMinutes(Math.ceil(now.getMinutes() / 15) * 15, 0, 0);
+  if (dayOffset !== 0) now.setDate(now.getDate() + dayOffset);
   const pad = (n: number) => String(n).padStart(2, "0");
   $<HTMLInputElement>("#ev-date").value = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
   $<HTMLInputElement>("#ev-time").value = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
@@ -254,10 +338,9 @@ function renderGoogleState() {
 }
 
 function openSettings() {
-  $<HTMLInputElement>("#s-ics").value = settings.ics_url;
   $<HTMLInputElement>("#s-gid").value = settings.google_client_id;
   $<HTMLInputElement>("#s-gsecret").value = settings.google_client_secret;
-  $<HTMLInputElement>("#s-lookahead").value = String(settings.lookahead_hours);
+  $<HTMLSelectElement>("#s-tomorrow").value = String(settings.tomorrow_until_hour);
   $<HTMLInputElement>("#s-width").value = String(settings.width);
   $<HTMLInputElement>("#s-allday").checked = settings.show_all_day;
   $<HTMLInputElement>("#s-reserve").checked = settings.reserve_space;
@@ -270,10 +353,9 @@ function openSettings() {
 
 function readSettingsForm(): Settings {
   return {
-    ics_url: $<HTMLInputElement>("#s-ics").value.trim(),
     google_client_id: $<HTMLInputElement>("#s-gid").value.trim(),
     google_client_secret: $<HTMLInputElement>("#s-gsecret").value.trim(),
-    lookahead_hours: Math.max(1, Number($<HTMLInputElement>("#s-lookahead").value) || 36),
+    tomorrow_until_hour: Math.min(24, Math.max(0, Number($<HTMLSelectElement>("#s-tomorrow").value) || 0)),
     width: Math.min(600, Math.max(240, Number($<HTMLInputElement>("#s-width").value) || 340)),
     show_all_day: $<HTMLInputElement>("#s-allday").checked,
     reserve_space: $<HTMLInputElement>("#s-reserve").checked,
@@ -339,6 +421,20 @@ function wireUi() {
   $("#btn-google-connect").addEventListener("click", connectGoogle);
   $("#btn-google-disconnect").addEventListener("click", disconnectGoogle);
   $("#btn-refresh").addEventListener("click", () => loadMeetings(true));
+  $("#btn-prev-day").addEventListener("click", () => showDay(dayOffset - 1));
+  $("#btn-next-day").addEventListener("click", () => showDay(dayOffset + 1));
+  $("#btn-today").addEventListener("click", () => showDay(0));
+  // Hour choices for the "show tomorrow before" setting.
+  const sel = $<HTMLSelectElement>("#s-tomorrow");
+  const opt = (v: number, label: string) => {
+    const o = document.createElement("option");
+    o.value = String(v);
+    o.textContent = label;
+    sel.appendChild(o);
+  };
+  opt(0, "Never show tomorrow");
+  for (let h = 5; h <= 18; h++) opt(h, fmtHour(h));
+  opt(24, "Show all of tomorrow");
   $("#btn-add-event").addEventListener("click", () => toggleEventForm());
   $("#ev-cancel").addEventListener("click", () => toggleEventForm(false));
   $("#event-form").addEventListener("submit", submitEvent);
@@ -403,7 +499,13 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   // Re-render relative times every 30s, refetch the feed every 5 min,
   // check for meetings about to start every 5s.
-  setInterval(renderMeetings, 30_000);
+  let renderedDay = dayStart(0);
+  setInterval(() => {
+    if (dayStart(0) !== renderedDay) {
+      renderedDay = dayStart(0);
+      loadMeetings();
+    } else renderMeetings();
+  }, 30_000);
   setInterval(checkAlerts, 5_000);
   setInterval(() => loadMeetings(), 5 * 60_000);
 

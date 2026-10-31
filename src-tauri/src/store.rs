@@ -75,28 +75,28 @@ pub fn parse_marker(text: &str) -> (String, &'static str) {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    pub ics_url: String,
     pub google_client_id: String,
     pub google_client_secret: String,
     pub always_on_top: bool,
     pub reserve_space: bool,
     pub autostart: bool,
     pub width: u32,
-    pub lookahead_hours: u32,
+    /// The Today view also lists tomorrow's events that start before this hour
+    /// (0 = never show tomorrow, 24 = all of tomorrow).
+    pub tomorrow_until_hour: u32,
     pub show_all_day: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            ics_url: String::new(),
             google_client_id: String::new(),
             google_client_secret: String::new(),
             always_on_top: false,
             reserve_space: true,
             autostart: false,
             width: 340,
-            lookahead_hours: 36,
+            tomorrow_until_hour: 10,
             show_all_day: true,
         }
     }
