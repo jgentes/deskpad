@@ -54,6 +54,70 @@ export function parseMarker(raw: string): { text: string; kind: "note" | "task" 
 
 const idx = (id: number) => items.findIndex((i) => i.id === id);
 const byId = (id: number) => items.find((i) => i.id === id);
+const childrenOf = (id: number) => items.filter((c) => c.parent === id);
+
+// ---------- collapse state ----------
+// Which parents are folded is a view preference, not data: it lives in
+// localStorage so it survives restarts without touching tasks.json.
+
+const COLLAPSED_KEY = "deskpad.collapsed";
+const collapsed = new Set<number>(loadCollapsed());
+
+function loadCollapsed(): number[] {
+  try {
+    const raw = localStorage.getItem(COLLAPSED_KEY);
+    const arr = raw ? (JSON.parse(raw) as unknown) : [];
+    return Array.isArray(arr) ? arr.filter((n): n is number => typeof n === "number") : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCollapsed() {
+  try {
+    localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...collapsed]));
+  } catch {
+    /* view preference only */
+  }
+}
+
+export function toggleCollapsed(id: number, force?: boolean) {
+  const next = force ?? !collapsed.has(id);
+  if (next) collapsed.add(id);
+  else collapsed.delete(id);
+  saveCollapsed();
+  render();
+}
+
+/** Rows currently shown, i.e. everything except children of folded parents. */
+function visibleItems(): Item[] {
+  return items.filter((i) => i.parent === null || !collapsed.has(i.parent));
+}
+
+const CHEVRON = `<svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" /></svg>`;
+
+/** Disclosure toggle shown in the gutter of a row that has children. */
+function renderToggle(isCollapsed: boolean, count: number, onToggle: () => void): HTMLElement {
+  const btn = document.createElement("button");
+  btn.className = "fold";
+  btn.tabIndex = -1;
+  btn.title = isCollapsed ? `Expand ${count} nested` : "Collapse";
+  btn.innerHTML = CHEVRON;
+  btn.addEventListener("mousedown", (e) => e.preventDefault());
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    onToggle();
+  });
+  return btn;
+}
+
+function renderCount(count: number): HTMLElement {
+  const badge = document.createElement("span");
+  badge.className = "count";
+  badge.textContent = String(count);
+  badge.title = `${count} nested`;
+  return badge;
+}
 
 /** Index of the last row in `parentId`'s block (the parent itself if childless). */
 function blockEnd(parentId: number): number {
@@ -177,7 +241,11 @@ function caretOnEdgeLine(el: HTMLElement, edge: "first" | "last"): boolean {
 function render() {
   const el = $("#outline");
   const frag = document.createDocumentFragment();
-  for (const it of items) frag.appendChild(renderRow(it));
+  // Drop folds for parents that no longer exist or have no children.
+  for (const id of [...collapsed]) {
+    if (!byId(id) || !items.some((c) => c.parent === id)) collapsed.delete(id);
+  }
+  for (const it of visibleItems()) frag.appendChild(renderRow(it));
   frag.appendChild(renderNewRow());
   el.replaceChildren(frag);
 
@@ -197,7 +265,8 @@ function render() {
 }
 
 function rowClass(it: Item) {
-  return `row ${it.kind}${it.done ? " done" : ""}${it.parent !== null ? " child" : ""}`;
+  const kids = it.parent === null && items.some((c) => c.parent === it.id);
+  return `row ${it.kind}${it.done ? " done" : ""}${it.parent !== null ? " child" : ""}${kids ? " parent" : ""}${kids && collapsed.has(it.id) ? " collapsed" : ""}`;
 }
 
 function renderRow(it: Item): HTMLElement {
@@ -210,8 +279,16 @@ function renderRow(it: Item): HTMLElement {
   mark.tabIndex = -1;
   mark.title = it.kind === "task" ? (it.done ? "Mark not done" : "Mark done") : "Turn into a task";
   mark.innerHTML = it.kind === "task" ? `<svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7" /></svg>` : "";
+  const kidCount = childrenOf(it.id).length;
+  if (kidCount && it.kind === "note") mark.title = collapsed.has(it.id) ? `Expand ${kidCount} nested` : "Collapse";
   mark.addEventListener("mousedown", (e) => e.preventDefault());
   mark.addEventListener("click", () => {
+    // A note bullet with children is a disclosure, like Workflowy. Task
+    // checkboxes keep toggling done; their fold lives on the chevron.
+    if (it.kind === "note" && kidCount) {
+      toggleCollapsed(it.id);
+      return;
+    }
     if (it.kind === "task") it.done = !it.done;
     else it.kind = "task";
     row.className = rowClass(it);
@@ -233,13 +310,15 @@ function renderRow(it: Item): HTMLElement {
   const del = document.createElement("button");
   del.className = "del";
   del.tabIndex = -1;
-  const kids = items.filter((c) => c.parent === it.id).length;
-  del.title = kids ? `Archive (with ${kids} nested)` : "Archive";
+  del.title = kidCount ? `Archive (with ${kidCount} nested)` : "Archive";
   del.innerHTML = `<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg>`;
   del.addEventListener("mousedown", (e) => e.preventDefault());
   del.addEventListener("click", () => archive([it.id]));
 
-  row.append(mark, txt, del);
+  if (kidCount) row.appendChild(renderToggle(collapsed.has(it.id), kidCount, () => toggleCollapsed(it.id)));
+  row.append(mark, txt);
+  if (kidCount && collapsed.has(it.id)) row.appendChild(renderCount(kidCount));
+  row.appendChild(del);
   return row;
 }
 
@@ -265,7 +344,8 @@ function renderNewRow(): HTMLElement {
   txt.addEventListener("keydown", (e) => {
     if (e.key === "ArrowUp" && items.length) {
       e.preventDefault();
-      pendingFocus = { id: items[items.length - 1].id, caret: "end" };
+      const vis = visibleItems();
+      pendingFocus = { id: vis[vis.length - 1].id, caret: "end" };
       render();
     } else if (e.key === "Enter") {
       e.preventDefault();
@@ -311,6 +391,7 @@ function onKey(e: KeyboardEvent, it: Item, txt: HTMLElement) {
       const after = it.text.slice(at);
       it.text = it.text.slice(0, at);
       const hasChildren = it.parent === null && items[i + 1]?.parent === it.id;
+      if (hasChildren) collapsed.delete(it.id);
       const next = newItem(after, hasChildren ? it.id : it.parent);
       items.splice(i + 1, 0, next);
       pendingFocus = { id: next.id, caret: 0 };
@@ -344,7 +425,8 @@ function onKey(e: KeyboardEvent, it: Item, txt: HTMLElement) {
     case "Backspace": {
       if (txt.textContent === "" || (caretOffset(txt) === 0 && !it.text)) {
         e.preventDefault();
-        const prev = items[i - 1];
+        const vis = visibleItems();
+        const prev = vis[vis.findIndex((v) => v.id === it.id) - 1];
         remove(it.id);
         pendingFocus = prev ? { id: prev.id, caret: "end" } : { id: "new", caret: 0 };
         scheduleSave();
@@ -354,7 +436,8 @@ function onKey(e: KeyboardEvent, it: Item, txt: HTMLElement) {
     }
     case "ArrowUp": {
       if (!caretOnEdgeLine(txt, "first")) return;
-      const prev = items[i - 1];
+      const vis = visibleItems();
+      const prev = vis[vis.findIndex((v) => v.id === it.id) - 1];
       if (!prev) return;
       e.preventDefault();
       focusRow(prev.id);
@@ -363,7 +446,8 @@ function onKey(e: KeyboardEvent, it: Item, txt: HTMLElement) {
     case "ArrowDown": {
       if (!caretOnEdgeLine(txt, "last")) return;
       e.preventDefault();
-      const next = items[i + 1];
+      const vis = visibleItems();
+      const next = vis[vis.findIndex((v) => v.id === it.id) + 1];
       if (next) focusRow(next.id);
       else setCaret($(".row.new .txt"), 0);
       return;
@@ -426,11 +510,17 @@ export async function openArchive() {
     if (r.parent !== null && ids.has(r.parent)) continue;
     ordered.push(r, ...byTime.filter((c) => c.parent === r.id));
   }
+  // Every archived parent starts folded; clicking it reveals the nested rows.
+  const expanded = new Set<number>();
+  function rebuild() {
   const frag = document.createDocumentFragment();
   let lastDay = "";
   for (const r of ordered) {
+    const isChild = r.parent !== null && ids.has(r.parent);
+    if (isChild && !expanded.has(r.parent as number)) continue;
+    const kids = isChild ? 0 : byTime.filter((c) => c.parent === r.id).length;
     const day = new Date(r.archived_at * 1000).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
-    if (day !== lastDay && !(r.parent !== null && ids.has(r.parent))) {
+    if (day !== lastDay && !isChild) {
       const sep = document.createElement("div");
       sep.className = "day-sep";
       sep.textContent = day;
@@ -438,13 +528,27 @@ export async function openArchive() {
       lastDay = day;
     }
     const row = document.createElement("div");
-    row.className = `row arch ${r.kind}${r.done ? " done" : ""}${r.parent !== null && ids.has(r.parent) ? " child" : ""}`;
+    row.className = `row arch ${r.kind}${r.done ? " done" : ""}${isChild ? " child" : ""}${kids ? " parent" : ""}${kids && !expanded.has(r.id) ? " collapsed" : ""}`;
     const mark = document.createElement("span");
     mark.className = "mark";
     if (r.kind === "task") mark.innerHTML = `<svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7" /></svg>`;
     const txt = document.createElement("div");
     txt.className = "txt";
     txt.textContent = r.text || "(empty)";
+    if (kids) {
+      // The whole row is the disclosure here: nothing in the archive is editable.
+      const toggle = () => {
+        if (expanded.has(r.id)) expanded.delete(r.id);
+        else expanded.add(r.id);
+        rebuild();
+      };
+      row.appendChild(renderToggle(!expanded.has(r.id), kids, toggle));
+      row.classList.add("clickable");
+      row.addEventListener("click", (e) => {
+        if ((e.target as HTMLElement).closest("button")) return;
+        toggle();
+      });
+    }
     const restore = document.createElement("button");
     restore.className = "mini";
     restore.title = "Restore to notes";
@@ -465,10 +569,14 @@ export async function openArchive() {
       refreshArchiveLink();
       openArchive();
     });
-    row.append(mark, txt, restore, del);
+    row.append(mark, txt);
+    if (kids && !expanded.has(r.id)) row.appendChild(renderCount(kids));
+    row.append(restore, del);
     frag.appendChild(row);
   }
   list.replaceChildren(frag);
+  }
+  rebuild();
 }
 
 export async function emptyArchive() {

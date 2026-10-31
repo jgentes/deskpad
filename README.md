@@ -22,9 +22,12 @@ Built with [Tauri 2](https://tauri.app) (Rust backend, WebView2 frontend).
   **Tab** nests a row under the one above (one level), **Shift+Tab** un-nests,
   **Enter** splits or creates a row, **Backspace** on an empty row deletes it.
   Click a bullet to turn a note into a task; click a checkbox to complete it.
+  A bullet with nested rows folds and unfolds them instead (tasks get a chevron
+  in the left gutter for that); a folded parent shows how many rows it hides.
   The row's ✕ and "archive N completed" move rows (with their nested children)
   to an **archive** rather than deleting; open it from the Notes header to
-  restore or permanently delete entries.
+  restore or permanently delete entries. Archived parents open folded; click
+  one to see what was nested under it.
 - **Add events** from the "+" in the Up next header (title, date, time, duration);
   they land on your primary Google calendar. Requires the Calendar events scope,
   so connections made before this feature need a disconnect/reconnect in Settings.

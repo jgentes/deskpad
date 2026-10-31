@@ -85,6 +85,15 @@ copy of Tauri's stock template with two changes, both marked `; Deskpad:`:
 
 `installMode` is `currentUser`, so no UAC prompt either.
 
+The relaunch races the shell: the old Deskpad is killed and the new one starts
+at once, while Explorer still holds the dead window's AppBar strip, so the new
+window gets docked one sidebar-width inboard. `appbar.rs` handles this: the
+AppBar registers a callback message and the window is subclassed, so on
+`ABN_POSCHANGED`, `WM_SETTINGCHANGE` or `WM_DISPLAYCHANGE` it re-docks whenever
+it is not flush with the monitor's right edge (`needs_redock`), and
+`schedule_redock_checks` in `lib.rs` sweeps a few times after launch in case the
+shell drops the stale strip silently. Keep both when touching docking.
+
 **When bumping `@tauri-apps/cli`**, re-copy the template from the matching tag
 (`crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi` at
 `tauri-cli-v<version>`), re-apply the two marked changes, and keep the header
@@ -105,3 +114,6 @@ Bump `version` in `src-tauri/tauri.conf.json` for each release.
   Tokens record the granted scope; `can_write()` gates event creation and a
   read-only grant produces a "disconnect and reconnect" message.
 - Alert timing lives in `main.ts` (`ALERT_LEAD` = 120 s, `ALERT_GRACE` = 300 s).
+- Fold state (which parents are collapsed) is a view preference kept in
+  `localStorage` (`deskpad.collapsed`), never in `tasks.json`. The archive view
+  always opens with every parent folded.

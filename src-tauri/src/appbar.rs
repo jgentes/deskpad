@@ -3,22 +3,96 @@
 
 #[cfg(windows)]
 pub mod imp {
-    use windows::Win32::Foundation::{HWND, LPARAM, RECT};
+    use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
     use windows::Win32::Graphics::Gdi::{
         GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
     };
     use windows::Win32::UI::Shell::{
-        SHAppBarMessage, ABE_RIGHT, ABM_NEW, ABM_QUERYPOS, ABM_REMOVE, ABM_SETPOS, APPBARDATA,
+        DefSubclassProc, SHAppBarMessage, SetWindowSubclass, ABE_RIGHT, ABM_NEW, ABM_QUERYPOS,
+        ABM_REMOVE, ABM_SETPOS, ABN_POSCHANGED, APPBARDATA,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
+        GetWindowRect, IsWindowVisible, SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOZORDER,
+        SWP_SHOWWINDOW, SW_HIDE, WM_APP, WM_DISPLAYCHANGE, WM_SETTINGCHANGE,
     };
+
+    /// Message the shell sends us for AppBar notifications (ABN_*).
+    const CALLBACK_MSG: u32 = WM_APP + 0x0A5B;
+    const SUBCLASS_ID: usize = 0x0A5B;
+
+    /// Width of the current reservation in physical pixels (0 = not reserving).
+    static RESERVED_WIDTH: AtomicI32 = AtomicI32::new(0);
+    /// When we last docked, in ms since the epoch. Notifications arriving right after
+    /// our own ABM_NEW/ABM_SETPOS are echoes of that and are ignored.
+    static LAST_DOCK_MS: AtomicU64 = AtomicU64::new(0);
+
+    fn now_ms() -> u64 {
+        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    }
+
+    /// True when the window is visible, reserving space, and not flush with the right
+    /// edge of its monitor at the reserved width. That is what a stale reservation from
+    /// a previous process looks like: the installer kills the old Deskpad and relaunches
+    /// at once, the shell still holds the dead window's strip, and ABM_QUERYPOS places
+    /// the new window inboard of it. Once the shell drops that strip we must re-dock.
+    pub unsafe fn needs_redock(hwnd: HWND) -> bool {
+        unsafe {
+            let width = RESERVED_WIDTH.load(Ordering::Relaxed);
+            if width == 0 || !IsWindowVisible(hwnd).as_bool() {
+                return false;
+            }
+            let mut r = RECT::default();
+            if GetWindowRect(hwnd, &mut r).is_err() {
+                return false;
+            }
+            let (full, _) = monitor_rects(hwnd);
+            r.right != full.right || r.right - r.left != width
+        }
+    }
+
+    /// Re-dock if `needs_redock`, unless we docked ourselves within the last 500 ms.
+    pub unsafe fn redock_if_displaced(hwnd: HWND) -> bool {
+        unsafe {
+            if now_ms().saturating_sub(LAST_DOCK_MS.load(Ordering::Relaxed)) <= 500
+                || !needs_redock(hwnd)
+            {
+                return false;
+            }
+            let width = RESERVED_WIDTH.load(Ordering::Relaxed);
+            dock_right(hwnd, width, true);
+            true
+        }
+    }
+
+    unsafe extern "system" fn subclass_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        _id: usize,
+        _data: usize,
+    ) -> LRESULT {
+        unsafe {
+            let notified = (msg == CALLBACK_MSG && wparam.0 as u32 == ABN_POSCHANGED)
+                || msg == WM_DISPLAYCHANGE
+                || msg == WM_SETTINGCHANGE;
+            if notified {
+                redock_if_displaced(hwnd);
+            }
+            if msg == CALLBACK_MSG {
+                return LRESULT(0);
+            }
+            DefSubclassProc(hwnd, msg, wparam, lparam)
+        }
+    }
 
     fn data(hwnd: HWND) -> APPBARDATA {
         APPBARDATA {
             cbSize: std::mem::size_of::<APPBARDATA>() as u32,
             hWnd: hwnd,
-            uCallbackMessage: 0,
+            uCallbackMessage: CALLBACK_MSG,
             uEdge: ABE_RIGHT,
             rc: RECT::default(),
             lParam: LPARAM(0),
@@ -47,6 +121,10 @@ pub mod imp {
         unsafe {
             let mut abd = data(hwnd);
             SHAppBarMessage(ABM_REMOVE, &mut abd);
+            // Idempotent for the same id; lets us hear ABN_POSCHANGED and re-dock.
+            let _ = SetWindowSubclass(hwnd, Some(subclass_proc), SUBCLASS_ID, 0);
+            RESERVED_WIDTH.store(if reserve { width_px } else { 0 }, Ordering::Relaxed);
+            LAST_DOCK_MS.store(now_ms(), Ordering::Relaxed);
 
             let (full, work) = monitor_rects(hwnd);
             if reserve {
@@ -86,6 +164,7 @@ pub mod imp {
         unsafe {
             let mut abd = data(hwnd);
             SHAppBarMessage(ABM_REMOVE, &mut abd);
+            RESERVED_WIDTH.store(0, Ordering::Relaxed);
         }
     }
 

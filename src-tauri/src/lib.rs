@@ -304,6 +304,41 @@ fn dock(win: &WebviewWindow, settings: &Settings) {
     }
 }
 
+/// After launch, check a few times whether the shell moved us off the right edge
+/// (a stale AppBar strip from a process the installer just killed) and re-dock.
+/// `appbar::imp::subclass_proc` handles later notifications; this covers the case
+/// where the shell silently drops the stale strip without notifying anyone.
+fn schedule_redock_checks(app: AppHandle) {
+    #[cfg(windows)]
+    {
+        std::thread::spawn(move || {
+            for delay_ms in [1000u64, 2500, 5000, 10000] {
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                let app2 = app.clone();
+                app.run_on_main_thread(move || {
+                    if *app2.state::<SidebarHidden>().0.lock().unwrap() {
+                        return;
+                    }
+                    if let Some(win) = app2.get_webview_window("main") {
+                        if let Ok(hwnd) = win.hwnd() {
+                            let hwnd = windows::Win32::Foundation::HWND(hwnd.0);
+                            if unsafe { appbar::imp::redock_if_displaced(hwnd) } {
+                                eprintln!("[dock] re-docked after displacement");
+                                place_tab(&app2);
+                            }
+                        }
+                    }
+                })
+                .ok();
+            }
+        });
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+    }
+}
+
 fn undock(win: &WebviewWindow) {
     #[cfg(windows)]
     {
@@ -538,6 +573,7 @@ pub fn run() {
                 win.set_always_on_top(settings.always_on_top).ok();
                 dock(&win, &settings);
                 win.show().ok();
+                schedule_redock_checks(app.handle().clone());
             }
 
             build_tray(app.handle())?;
