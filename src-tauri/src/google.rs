@@ -375,6 +375,24 @@ impl Google {
         start: i64,
         end: i64,
     ) -> Result<Meeting, String> {
+        self.upsert_event(client_id, client_secret, None, title, start, end, false).await
+    }
+
+    /// Create an event on the primary calendar, or update `existing` (a raw
+    /// Google event id) in place. An all-day event spans the local dates of
+    /// `start` and `end` (`end` exclusive, as Google defines it). If the
+    /// existing event was deleted in Google, a fresh one is created instead.
+    /// The returned `Meeting` carries the event id as `g:<id>`.
+    pub async fn upsert_event(
+        &self,
+        client_id: &str,
+        client_secret: &str,
+        existing: Option<&str>,
+        title: &str,
+        start: i64,
+        end: i64,
+        all_day: bool,
+    ) -> Result<Meeting, String> {
         if !self.can_write() {
             return Err("Deskpad only has read access to your calendar. Disconnect and reconnect Google in Settings to allow adding events.".into());
         }
@@ -387,20 +405,41 @@ impl Google {
         }
         let token = self.access_token(client_id, client_secret).await?;
         let tz = iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".into());
-        let fmt = |t: i64| Local.timestamp_opt(t, 0).single().map(|d| d.to_rfc3339()).ok_or("bad time")
-            .map_err(|e: &str| e.to_string());
-        let body = serde_json::json!({
-            "summary": title,
-            "start": { "dateTime": fmt(start)?, "timeZone": tz },
-            "end": { "dateTime": fmt(end)?, "timeZone": tz },
-        });
-        let resp = client()?
-            .post("https://www.googleapis.com/calendar/v3/calendars/primary/events")
-            .bearer_auth(&token)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
+        let local = |t: i64| Local.timestamp_opt(t, 0).single().ok_or_else(|| "bad time".to_string());
+        let body = if all_day {
+            let s = local(start)?.date_naive();
+            let mut e = local(end)?.date_naive();
+            if e <= s {
+                e = s.succ_opt().ok_or("bad time")?;
+            }
+            serde_json::json!({
+                "summary": title,
+                "start": { "date": s.format("%Y-%m-%d").to_string() },
+                "end": { "date": e.format("%Y-%m-%d").to_string() },
+            })
+        } else {
+            serde_json::json!({
+                "summary": title,
+                "start": { "dateTime": local(start)?.to_rfc3339(), "timeZone": tz },
+                "end": { "dateTime": local(end)?.to_rfc3339(), "timeZone": tz },
+            })
+        };
+        let http = client()?;
+        let create_url = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
+        let mut resp = match existing.filter(|id| !id.is_empty()) {
+            Some(id) => http
+                .patch(format!("{create_url}/{}", urlencode(id)))
+                .bearer_auth(&token)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?,
+            None => http.post(create_url).bearer_auth(&token).json(&body).send().await.map_err(|e| e.to_string())?,
+        };
+        if existing.is_some() && matches!(resp.status().as_u16(), 404 | 410) {
+            // The user removed it in Google; make a new one.
+            resp = http.post(create_url).bearer_auth(&token).json(&body).send().await.map_err(|e| e.to_string())?;
+        }
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
@@ -415,10 +454,34 @@ impl Google {
             title: ev.summary.unwrap_or_else(|| title.to_string()),
             start,
             end,
-            all_day: false,
+            all_day,
             location: ev.location,
             url: ev.hangout_link.or(ev.html_link),
         })
+    }
+
+    /// Delete an event from the primary calendar by raw Google id. An event
+    /// that is already gone counts as success.
+    pub async fn delete_event(&self, client_id: &str, client_secret: &str, event_id: &str) -> Result<(), String> {
+        if event_id.is_empty() {
+            return Ok(());
+        }
+        if !self.can_write() {
+            return Err("Deskpad only has read access to your calendar. Disconnect and reconnect Google in Settings to allow changing events.".into());
+        }
+        let token = self.access_token(client_id, client_secret).await?;
+        let resp = client()?
+            .delete(format!("https://www.googleapis.com/calendar/v3/calendars/primary/events/{}", urlencode(event_id)))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        if resp.status().is_success() || matches!(resp.status().as_u16(), 404 | 410) {
+            return Ok(());
+        }
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        Err(format!("Google refused to remove the event ({status}): {text}"))
     }
 }
 

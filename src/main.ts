@@ -510,6 +510,8 @@ window.addEventListener("DOMContentLoaded", async () => {
   setInterval(() => loadMeetings(), 5 * 60_000);
 
   listen("items-changed", () => loadItems()).catch((err) => console.error("listen failed", err));
+  // A task was put on (or taken off) the calendar from the outline or capture.
+  listen("calendar-changed", () => loadMeetings(true)).catch((err) => console.error("listen failed", err));
   listen("open-settings", () => openSettings()).catch((err) => console.error("listen failed", err));
   listen<{ id: string; action: string; minutes: number }>("alert-action", (e) => onAlertAction(e.payload)).catch((err) =>
     console.error("listen failed", err),

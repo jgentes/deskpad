@@ -17,6 +17,22 @@ pub struct Item {
     #[serde(default)]
     pub parent: Option<u64>,
     pub created_at: i64,
+    /// Set when the task is on the calendar.
+    #[serde(default)]
+    pub schedule: Option<Schedule>,
+}
+
+/// A task's place on the calendar: the event window (unix seconds) and the
+/// Google event id, so the event can be updated or removed later. `event_id`
+/// is `None` when creating the event failed and only the local time is kept.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+pub struct Schedule {
+    pub start: i64,
+    pub end: i64,
+    #[serde(default)]
+    pub all_day: bool,
+    #[serde(default)]
+    pub event_id: Option<String>,
 }
 
 /// Files written before notes existed only held tasks.
@@ -41,6 +57,7 @@ impl Item {
             done: false,
             parent,
             created_at: now.timestamp(),
+            schedule: None,
         })
     }
 }
@@ -267,7 +284,7 @@ mod tests {
     use super::{backup_daily, load_json, parse_marker, write_atomic, Item, Store};
 
     fn item(id: u64, parent: Option<u64>) -> Item {
-        Item { id, text: format!("item {id}"), kind: "note".into(), done: false, parent, created_at: 0 }
+        Item { id, text: format!("item {id}"), kind: "note".into(), done: false, parent, created_at: 0, schedule: None }
     }
 
     #[test]
@@ -309,6 +326,16 @@ mod tests {
         backup_daily(&path, &dir.join("backups"));
         assert_eq!(std::fs::read_dir(dir.join("backups")).unwrap().count(), 1);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn items_without_schedule_still_load() {
+        let old = r#"[{"id":1,"text":"a","kind":"task","done":false,"parent":null,"created_at":0}]"#;
+        let items: Vec<Item> = serde_json::from_str(old).unwrap();
+        assert!(items[0].schedule.is_none());
+        let new = r#"[{"id":1,"text":"a","kind":"task","done":false,"parent":null,"created_at":0,"schedule":{"start":10,"end":20}}]"#;
+        let items: Vec<Item> = serde_json::from_str(new).unwrap();
+        assert_eq!(items[0].schedule, Some(super::Schedule { start: 10, end: 20, all_day: false, event_id: None }));
     }
 
     #[test]

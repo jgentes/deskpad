@@ -31,6 +31,17 @@ Built with [Tauri 2](https://tauri.app) (Rust backend, WebView2 frontend).
   to an **archive** rather than deleting; open it from the Notes header to
   restore or permanently delete entries. Archived parents open folded; click
   one to see what was nested under it.
+- **Scheduled tasks**: write the time into the row and it goes on your calendar.
+  "meet with tom next friday at 10am", "dentist tomorrow 2:30pm", "call mom
+  tonight", "taxes on 4/15", "standup in 2 hours" all work, in the outline (on
+  Enter or when you leave the row) and in the capture popup. The date phrase is
+  removed, the row becomes a task, and a badge shows when it is; hover the
+  badge and click its ✕ to take it off the calendar again. A time without a
+  date means today (or tomorrow if it has passed); a date without a time is an
+  all-day event; "for 1 hour" sets the length (default 30 minutes). Plain day
+  names in the middle of a sentence ("notes from monday meeting") are left
+  alone, as are `/note` rows and anything "every ...". Editing a scheduled
+  row's text with a new time moves the event.
 - **Add events** from the "+" in the Up next header (title, date, time, duration);
   they land on your primary Google calendar. Requires the Calendar events scope,
   so connections made before this feature need a disconnect/reconnect in Settings.
@@ -119,6 +130,8 @@ saves the outline until it has successfully loaded it from disk.
 | `src-tauri/src/google.rs` | Google OAuth (PKCE + loopback) and Calendar API |
 | `src-tauri/src/store.rs` | Outline items + settings persistence, task-marker parsing |
 | `src/main.ts`, `index.html` | Sidebar UI |
+| `src/outline.ts` | Notes/tasks outliner and archive view |
+| `src/schedule.ts` | Natural-language date/time parser shared by the outline and capture |
 | `src/capture.ts`, `capture.html` | Ctrl+Space capture popup |
 
 ## License

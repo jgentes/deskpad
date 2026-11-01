@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use google::Google;
 use serde::Serialize;
 use std::sync::Mutex;
-use store::{ArchivedItem, Item, Settings, Store};
+use store::{ArchivedItem, Item, Schedule, Settings, Store};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
@@ -67,14 +67,99 @@ fn delete_archived(store: State<Store>, ids: Vec<u64>) {
 }
 
 /// Add a top-level item from raw text (used by the capture popup). Task markers
-/// in the text are honoured. Inserted at the top so a capture is visible at once.
+/// in the text are honoured; `kind` overrides them (the popup passes "task"
+/// when it found a date in the text). Inserted at the top so a capture is
+/// visible at once.
 #[tauri::command]
-fn add_item(app: AppHandle, store: State<Store>, text: String) -> Option<Item> {
-    let item = Item::from_text(&text, None)?;
+fn add_item(app: AppHandle, store: State<Store>, text: String, kind: Option<String>) -> Option<Item> {
+    let mut item = Item::from_text(&text, None)?;
+    if let Some(k) = kind.filter(|k| k == "task" || k == "note") {
+        item.kind = k;
+    }
     store.items.lock().unwrap().insert(0, item.clone());
     store.save_items();
     app.emit("items-changed", ()).ok();
     Some(item)
+}
+
+/// Put a row on the calendar: create (or move) its Google event and record
+/// the schedule on the item, which becomes a task. The frontend has already
+/// parsed the date out of the text, so `start`/`end` are unix seconds.
+#[tauri::command]
+async fn schedule_item(
+    app: AppHandle,
+    store: State<'_, Store>,
+    google: State<'_, Google>,
+    id: u64,
+    start: i64,
+    end: i64,
+    all_day: bool,
+) -> Result<Item, String> {
+    if !google.connected() {
+        return Err("Connect Google Calendar in Settings to put tasks on your calendar.".into());
+    }
+    if end <= start {
+        return Err("The event must end after it starts.".into());
+    }
+    let (title, existing) = {
+        let items = store.items.lock().unwrap();
+        let it = items.iter().find(|i| i.id == id).ok_or("That row no longer exists.")?;
+        (it.text.clone(), it.schedule.as_ref().and_then(|s| s.event_id.clone()))
+    };
+    let (cid, secret) = {
+        let s = store.settings.lock().unwrap();
+        (s.google_client_id.clone(), s.google_client_secret.clone())
+    };
+    let created = google
+        .upsert_event(&cid, &secret, existing.as_deref(), &title, start, end, all_day)
+        .await?;
+    let event_id = created.id.strip_prefix("g:").unwrap_or(&created.id).to_string();
+    let item = {
+        let mut items = store.items.lock().unwrap();
+        let it = items.iter_mut().find(|i| i.id == id).ok_or("That row no longer exists.")?;
+        it.kind = "task".into();
+        it.schedule = Some(Schedule { start, end, all_day, event_id: Some(event_id) });
+        it.clone()
+    };
+    store.save_items();
+    app.emit("items-changed", ()).ok();
+    app.emit("calendar-changed", ()).ok();
+    Ok(item)
+}
+
+/// Take a row off the calendar: delete its Google event (if it has one) and
+/// clear the schedule. The row stays in the outline.
+#[tauri::command]
+async fn unschedule_item(
+    app: AppHandle,
+    store: State<'_, Store>,
+    google: State<'_, Google>,
+    id: u64,
+) -> Result<Item, String> {
+    let existing = {
+        let items = store.items.lock().unwrap();
+        let it = items.iter().find(|i| i.id == id).ok_or("That row no longer exists.")?;
+        it.schedule.as_ref().and_then(|s| s.event_id.clone())
+    };
+    if let Some(ev) = existing.filter(|e| !e.is_empty()) {
+        if google.connected() {
+            let (cid, secret) = {
+                let s = store.settings.lock().unwrap();
+                (s.google_client_id.clone(), s.google_client_secret.clone())
+            };
+            google.delete_event(&cid, &secret, &ev).await?;
+        }
+    }
+    let item = {
+        let mut items = store.items.lock().unwrap();
+        let it = items.iter_mut().find(|i| i.id == id).ok_or("That row no longer exists.")?;
+        it.schedule = None;
+        it.clone()
+    };
+    store.save_items();
+    app.emit("items-changed", ()).ok();
+    app.emit("calendar-changed", ()).ok();
+    Ok(item)
 }
 
 // ---------- Settings ----------
@@ -629,6 +714,8 @@ pub fn run() {
             list_items,
             set_items,
             add_item,
+            schedule_item,
+            unschedule_item,
             list_archive,
             archive_items,
             restore_items,

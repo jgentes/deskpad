@@ -1,5 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { parseMarker, parseSchedule } from "./schedule";
+
+interface AddedItem {
+  id: number;
+}
 
 window.addEventListener("DOMContentLoaded", async () => {
   const form = document.querySelector("#capture-form") as HTMLFormElement;
@@ -21,12 +26,28 @@ window.addEventListener("DOMContentLoaded", async () => {
       invoke("hide_capture");
       return;
     }
-    await invoke("add_item", { text });
+    // "meet tom friday at 10am" becomes a task on the calendar; a /note is
+    // never scheduled.
+    const marker = parseMarker(text);
+    const sched = marker.kind === "note" ? null : parseSchedule(marker.text);
+    const item = await invoke<AddedItem | null>("add_item", { text: sched ? sched.title : text, kind: sched ? "task" : null });
     input.value = "";
-    flash.textContent = "Saved ✓";
+    let msg = "Saved ✓";
+    let hold = 350;
+    if (sched && item) {
+      try {
+        await invoke("schedule_item", { id: item.id, start: sched.start, end: sched.end, allDay: sched.allDay });
+        msg = "Added to calendar ✓";
+      } catch (err) {
+        console.error("schedule_item failed", err);
+        msg = `Saved, but not on the calendar: ${String(err)}`;
+        hold = 4000;
+      }
+    }
+    flash.textContent = msg;
     flash.classList.add("show");
-    setTimeout(() => flash.classList.remove("show"), 900);
-    setTimeout(() => invoke("hide_capture"), 350);
+    setTimeout(() => flash.classList.remove("show"), hold + 550);
+    setTimeout(() => invoke("hide_capture"), hold);
   });
 
   input.addEventListener("keydown", (e) => {

@@ -18,6 +18,7 @@ Ctrl+Space, and throws a full-screen alert two minutes before a meeting.
 | `src-tauri/nsis/installer.nsi` | Custom NSIS installer template (see below) |
 | `src/main.ts` | Sidebar: clock, meetings, add-event form, alert scheduler, settings |
 | `src/outline.ts` | Notes/tasks outliner and archive view |
+| `src/schedule.ts` | Natural-language date/time parser (`parseSchedule`) and the shared marker parser |
 | `src/capture.ts`, `src/tab.ts`, `src/alert.ts` | Capture popup, collapsed edge tab, alert overlay |
 | `index.html`, `capture.html`, `tab.html`, `alert.html` | One page per window (Vite multi-page) |
 
@@ -131,3 +132,14 @@ Bump `version` in `src-tauri/tauri.conf.json` for each release.
 - Fold state (which parents are collapsed) is a view preference kept in
   `localStorage` (`deskpad.collapsed`), never in `tasks.json`. The archive view
   always opens with every parent folded.
+- Scheduling: only the frontend parses language (`src/schedule.ts`,
+  `parseSchedule(text, now)`; it is pure, so test it with
+  `node --experimental-strip-types` and a fixed `now`). The outline runs it
+  when a row is committed (Enter, blur) and the capture popup on submit; the
+  backend's `schedule_item(id, start, end, all_day)` creates or patches the
+  Google event and stores `Item.schedule { start, end, all_day, event_id }`,
+  `unschedule_item(id)` deletes the event and clears it. Both emit
+  `items-changed` and `calendar-changed` (the sidebar reloads meetings on the
+  latter). A failed create keeps the schedule locally with `event_id: null` so
+  the typed time isn't lost; the badge shows it is off the calendar. Archiving
+  or completing a scheduled task leaves its event alone.

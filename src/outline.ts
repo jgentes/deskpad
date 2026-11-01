@@ -2,8 +2,24 @@
 // a marker (`- `, `[]`, `/task`) or Ctrl+Enter, and can nest one level under
 // the item above it with Tab. The frontend owns ordering; after every change
 // the whole list is sent to the backend with `set_items`.
+//
+// A row whose text names a date or time ("meet tom next friday at 10am") is
+// scheduled when it is committed (Enter or leaving the row): the phrase is
+// removed, the row becomes a task, and the backend puts it on the Google
+// calendar. The badge after the text shows when; its ✕ takes it off again.
 
 import { invoke } from "@tauri-apps/api/core";
+import { fmtSchedule, fmtScheduleLong, parseMarker, parseSchedule, type Parsed } from "./schedule";
+
+export { parseMarker };
+
+export interface Schedule {
+  start: number;
+  end: number;
+  all_day: boolean;
+  /** Google event id; null when the event could not be created. */
+  event_id: string | null;
+}
 
 export interface Item {
   id: number;
@@ -12,6 +28,7 @@ export interface Item {
   done: boolean;
   parent: number | null;
   created_at: number;
+  schedule: Schedule | null;
 }
 
 export interface ArchivedItem extends Item {
@@ -29,28 +46,6 @@ let dirty = false;
 let pendingFocus: { id: number | "new"; caret: number | "end" } | null = null;
 
 // ---------- model helpers ----------
-
-/** Mirror of the backend's marker parser so typing a marker converts instantly. */
-export function parseMarker(raw: string): { text: string; kind: "note" | "task" | null } {
-  let t = raw;
-  let kind: "note" | "task" | null = null;
-  for (const m of ["[ ]", "[]", "- "]) {
-    if (t.startsWith(m)) {
-      t = t.slice(m.length).replace(/^\s+/, "");
-      kind = "task";
-      break;
-    }
-  }
-  if (/\/task\b/.test(t)) {
-    t = t.replace(/\s*\/task\b/g, "");
-    kind = "task";
-  }
-  if (/\/note\b/.test(t)) {
-    t = t.replace(/\s*\/note\b/g, "");
-    kind = "note";
-  }
-  return { text: t, kind };
-}
 
 const idx = (id: number) => items.findIndex((i) => i.id === id);
 const byId = (id: number) => items.find((i) => i.id === id);
@@ -127,8 +122,10 @@ function blockEnd(parentId: number): number {
 }
 
 function newItem(text: string, parent: number | null, kind: "note" | "task" = "note"): Item {
-  return { id: Date.now() * 1000 + Math.floor(Math.random() * 1000), text, kind, done: false, parent, created_at: Math.floor(Date.now() / 1000) };
+  return { id: Date.now() * 1000 + Math.floor(Math.random() * 1000), text, kind, done: false, parent, created_at: Math.floor(Date.now() / 1000), schedule: null };
 }
+
+const CHECK = `<svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7" /></svg>`;
 
 function remove(id: number) {
   // Promote children so nothing is orphaned.
@@ -189,7 +186,7 @@ export async function loadItems() {
     // Keep unsaved local text edits for rows the backend still has.
     for (const f of fetched) {
       const local = byId(f.id);
-      if (local) Object.assign(f, { text: local.text, kind: local.kind, done: local.done });
+      if (local) Object.assign(f, { text: local.text, kind: local.kind, done: local.done, schedule: local.schedule });
     }
   }
   items = fetched;
@@ -240,6 +237,15 @@ function caretOnEdgeLine(el: HTMLElement, edge: "first" | "last"): boolean {
 
 function render() {
   const el = $("#outline");
+  // A reload from the backend (capture popup, scheduling) must not steal the
+  // caret from a row being typed in.
+  if (!pendingFocus) {
+    const active = document.activeElement as HTMLElement | null;
+    const row = active?.closest<HTMLElement>("#outline .row");
+    if (active && row && active.classList.contains("txt")) {
+      pendingFocus = { id: row.classList.contains("new") ? "new" : Number(row.dataset.id), caret: caretOffset(active) };
+    }
+  }
   const frag = document.createDocumentFragment();
   // Drop folds for parents that no longer exist or have no children.
   for (const id of [...collapsed]) {
@@ -266,7 +272,111 @@ function render() {
 
 function rowClass(it: Item) {
   const kids = it.parent === null && items.some((c) => c.parent === it.id);
-  return `row ${it.kind}${it.done ? " done" : ""}${it.parent !== null ? " child" : ""}${kids ? " parent" : ""}${kids && collapsed.has(it.id) ? " collapsed" : ""}`;
+  return `row ${it.kind}${it.done ? " done" : ""}${it.parent !== null ? " child" : ""}${kids ? " parent" : ""}${kids && collapsed.has(it.id) ? " collapsed" : ""}${it.schedule ? " scheduled" : ""}`;
+}
+
+// ---------- scheduling ----------
+
+/** Rows with a calendar request in flight, so a blur right after Enter can't double up. */
+const scheduling = new Set<number>();
+/** Why the last calendar call for a row failed, for the badge tooltip. */
+const scheduleErrors = new Map<number, string>();
+
+/** If the row's text names a date/time, strip it and make the row a task.
+ *  Returns the parsed window; the caller then calls `commitSchedule`. */
+function detectSchedule(it: Item): Parsed | null {
+  if (scheduling.has(it.id)) return null;
+  const p = parseSchedule(it.text);
+  if (!p) return null;
+  it.text = p.title;
+  it.kind = "task";
+  scheduleSave();
+  return p;
+}
+
+/** Ask the backend to put the row on the calendar and show the result on its badge. */
+async function commitSchedule(it: Item, p: Parsed) {
+  scheduling.add(it.id);
+  try {
+    await flushSave();
+    const updated = await invoke<Item>("schedule_item", { id: it.id, start: p.start, end: p.end, allDay: p.allDay });
+    const local = byId(it.id);
+    if (local) local.schedule = updated.schedule;
+    scheduleErrors.delete(it.id);
+  } catch (err) {
+    console.error("schedule_item failed", err);
+    // Keep the time locally so nothing the user typed is lost; the badge
+    // shows it isn't on the calendar and why.
+    const local = byId(it.id);
+    if (local) local.schedule = { start: p.start, end: p.end, all_day: p.allDay, event_id: null };
+    scheduleErrors.set(it.id, String(err));
+    scheduleSave();
+  } finally {
+    scheduling.delete(it.id);
+  }
+  refreshRow(it.id);
+}
+
+async function unschedule(it: Item) {
+  if (scheduling.has(it.id)) return;
+  scheduling.add(it.id);
+  try {
+    await flushSave();
+    const updated = await invoke<Item>("unschedule_item", { id: it.id });
+    const local = byId(it.id);
+    if (local) local.schedule = updated.schedule;
+    scheduleErrors.delete(it.id);
+  } catch (err) {
+    console.error("unschedule_item failed", err);
+    scheduleErrors.set(it.id, String(err));
+  } finally {
+    scheduling.delete(it.id);
+  }
+  refreshRow(it.id);
+}
+
+/** Calendar badge after the text: when it is, and a ✕ to take it off the calendar. */
+function renderWhen(it: Item): HTMLElement {
+  const s = it.schedule!;
+  const el = document.createElement("span");
+  const past = s.end < Date.now() / 1000;
+  el.className = `when${s.event_id ? "" : " off"}${past ? " past" : ""}`;
+  const long = fmtScheduleLong(s.start, s.end, s.all_day);
+  const err = scheduleErrors.get(it.id);
+  el.title = s.event_id ? `On your calendar: ${long}` : `Not on your calendar${err ? ` (${err})` : ""}: ${long}`;
+  const text = document.createElement("span");
+  text.className = "when-text";
+  text.textContent = fmtSchedule(s.start, s.all_day);
+  const x = document.createElement("button");
+  x.className = "when-x";
+  x.tabIndex = -1;
+  x.title = "Remove from calendar";
+  x.textContent = "×";
+  x.addEventListener("mousedown", (e) => e.preventDefault());
+  x.addEventListener("click", (e) => {
+    e.stopPropagation();
+    unschedule(it);
+  });
+  el.append(text, x);
+  return el;
+}
+
+/** Update one row in place (class, text, checkbox, badge) without rebuilding
+ *  the list, so the caret stays wherever the user is typing. */
+function refreshRow(id: number) {
+  const it = byId(id);
+  const row = document.querySelector<HTMLElement>(`#outline .row[data-id="${id}"]`);
+  if (!it || !row) return;
+  row.className = rowClass(it);
+  const txt = row.querySelector<HTMLElement>(".txt");
+  if (txt && document.activeElement !== txt && txt.textContent !== it.text) txt.textContent = it.text;
+  const mark = row.querySelector<HTMLElement>(".mark");
+  if (mark) {
+    mark.innerHTML = it.kind === "task" ? CHECK : "";
+    if (it.kind === "task") mark.title = it.done ? "Mark not done" : "Mark done";
+  }
+  row.querySelector(".when")?.remove();
+  if (it.schedule && txt) txt.after(renderWhen(it));
 }
 
 function renderRow(it: Item): HTMLElement {
@@ -305,7 +415,14 @@ function renderRow(it: Item): HTMLElement {
   txt.textContent = it.text;
   txt.addEventListener("input", () => onInput(it, txt));
   txt.addEventListener("keydown", (e) => onKey(e, it, txt));
-  txt.addEventListener("blur", () => flushSave());
+  txt.addEventListener("blur", () => {
+    const p = detectSchedule(it);
+    if (p) {
+      refreshRow(it.id);
+      void commitSchedule(it, p);
+    }
+    flushSave();
+  });
 
   const del = document.createElement("button");
   del.className = "del";
@@ -317,6 +434,7 @@ function renderRow(it: Item): HTMLElement {
 
   if (kidCount) row.appendChild(renderToggle(collapsed.has(it.id), kidCount, () => toggleCollapsed(it.id)));
   row.append(mark, txt);
+  if (it.schedule) row.appendChild(renderWhen(it));
   if (kidCount && collapsed.has(it.id)) row.appendChild(renderCount(kidCount));
   row.appendChild(del);
   return row;
@@ -390,6 +508,9 @@ function onKey(e: KeyboardEvent, it: Item, txt: HTMLElement) {
       const at = caretOffset(txt);
       const after = it.text.slice(at);
       it.text = it.text.slice(0, at);
+      // Committing a row with a date in it puts it on the calendar.
+      const sched = detectSchedule(it);
+      if (sched) void commitSchedule(it, sched);
       const hasChildren = it.parent === null && items[i + 1]?.parent === it.id;
       if (hasChildren) collapsed.delete(it.id);
       const next = newItem(after, hasChildren ? it.id : it.parent);
