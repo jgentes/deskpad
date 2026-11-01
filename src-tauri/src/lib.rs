@@ -87,13 +87,71 @@ fn get_settings(store: State<Store>) -> Settings {
 fn apply_autostart(app: &AppHandle, enabled: bool) -> Result<(), String> {
     // A dev build must never register itself: the Run entry would point at
     // target\debug\deskpad.exe, which needs the Vite server and shows a console.
-    // The installed release build re-applies the entry on every launch.
+    // The installed release build re-applies the entry on every launch
+    // (`sync_autostart_on_launch`).
     if cfg!(debug_assertions) {
         eprintln!("[autostart] skipped in debug build (would be {enabled})");
         return Ok(());
     }
     let al = app.autolaunch();
     if enabled { al.enable() } else { al.disable() }.map_err(|e| e.to_string())
+}
+
+/// Runs once at startup. Release: re-assert the Run entry so it always points
+/// at the exe that is actually installed, even if an installer, an old dev
+/// build or a manual edit changed or removed it. Debug: if the Run entry points
+/// at a `target\debug` build (left by a build older than the guard above),
+/// delete it so a stale dev exe can't be launched at sign-in again.
+fn sync_autostart_on_launch(app: &AppHandle, wanted: bool) {
+    if cfg!(debug_assertions) {
+        #[cfg(windows)]
+        match remove_debug_run_entry() {
+            Ok(true) => eprintln!("[autostart] removed a Run entry that pointed at a debug build"),
+            Ok(false) => {}
+            Err(e) => eprintln!("[autostart] could not inspect the Run entry: {e}"),
+        }
+        return;
+    }
+    if let Err(e) = apply_autostart(app, wanted) {
+        eprintln!("[autostart] could not apply (wanted {wanted}): {e}");
+    }
+}
+
+/// Delete HKCU\...\Run\Deskpad if its command mentions `target\debug`.
+/// Returns whether an entry was removed.
+#[cfg(windows)]
+fn remove_debug_run_entry() -> Result<bool, String> {
+    use windows::core::w;
+    use windows::Win32::System::Registry::{
+        RegDeleteKeyValueW, RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ,
+    };
+    let sub = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+    let name = w!("Deskpad");
+    let mut buf = [0u16; 2048];
+    let mut size = (buf.len() * 2) as u32;
+    let rc = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            sub,
+            name,
+            RRF_RT_REG_SZ,
+            None,
+            Some(buf.as_mut_ptr() as *mut _),
+            Some(&mut size),
+        )
+    };
+    if rc.is_err() {
+        return Ok(false); // no entry (or not a string): nothing to do
+    }
+    let len = (size as usize / 2).saturating_sub(1).min(buf.len());
+    let cmd = String::from_utf16_lossy(&buf[..len]).to_ascii_lowercase();
+    if !cmd.contains("target\\debug") {
+        return Ok(false);
+    }
+    unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, sub, name) }
+        .ok()
+        .map_err(|e| e.to_string())?;
+    Ok(true)
 }
 
 #[tauri::command]
@@ -536,6 +594,7 @@ pub fn run() {
                 }
             }
             let settings = app.state::<Store>().settings.lock().unwrap().clone();
+            sync_autostart_on_launch(app.handle(), settings.autostart);
 
             if let Some(win) = app.get_webview_window("main") {
                 win.set_always_on_top(settings.always_on_top).ok();

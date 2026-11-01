@@ -58,7 +58,11 @@ installed app and the dev build share it.
    parse is moved aside as `*.corrupt-<timestamp>` rather than overwritten.
 4. **Debug builds never touch autostart.** `apply_autostart` returns early
    under `cfg!(debug_assertions)`; otherwise the Run key ends up pointing at
-   `target\debug\deskpad.exe`, which needs the Vite server.
+   `target\debug\deskpad.exe`, which needs the Vite server. On every launch
+   `sync_autostart_on_launch` makes the release build re-assert its Run entry
+   when autostart is on, and makes a debug build delete a Run entry that
+   points at a `target\debug` path (left behind by builds older than the
+   guard). Keep both halves.
 
 If you add a new persisted file, use `load_json` and `write_atomic`.
 
@@ -73,12 +77,17 @@ no "create desktop shortcut" or "launch app" checkboxes, no "app is running"
 dialog. It closes a running Deskpad, copies the new build, and relaunches it.
 
 This is done with `bundle.windows.nsis.template = "nsis/installer.nsi"`, a
-copy of Tauri's stock template with two changes, both marked `; Deskpad:`:
+copy of Tauri's stock template with three changes, all marked `; Deskpad:`:
 
 - `.onInit` unconditionally sets `$PassiveMode 1` (the stock template only
   does this for the `/P` flag). Passive mode skips every page via
   `SkipIfPassive`, and the `CheckIfAppIsRunning` macro kills the running app
   instead of prompting.
+- `.onInit` also unconditionally sets `$UpdateMode 1`. Otherwise installing
+  the same version takes the reinstall page's "uninstall first" branch (the
+  page is skipped, so its choice variable is never set) and the previous
+  uninstaller deletes the HKCU Run autostart entry. Update mode overwrites in
+  place and preserves it.
 - `.onInstSuccess` always relaunches the app with `nsis_tauri_utils::RunAsUser`
   (the stock template requires `/R`).
 
@@ -95,10 +104,12 @@ shell drops the stale strip silently. Keep both when touching docking.
 
 **When bumping `@tauri-apps/cli`**, re-copy the template from the matching tag
 (`crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi` at
-`tauri-cli-v<version>`), re-apply the two marked changes, and keep the header
+`tauri-cli-v<version>`), re-apply the three marked changes, and keep the header
 comment current. Then build and run the installer against a running Deskpad
 and confirm: it exits within a few seconds, the only window is the progress
-page, the old process is gone, and a new one is running.
+page, the old process is gone, a new one is running, and the `Deskpad` value
+under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` still points at
+the installed exe.
 
 Bump `version` in `src-tauri/tauri.conf.json` for each release.
 

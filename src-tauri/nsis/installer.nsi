@@ -1,6 +1,6 @@
 ; Deskpad installer template. Copied verbatim from tauri-apps/tauri tag
 ; tauri-cli-v2.12.4 (crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi)
-; with two changes marked "Deskpad:" in .onInit and .onInstSuccess. When the
+; with three changes marked "Deskpad:" (two in .onInit, one in .onInstSuccess). When the
 ; @tauri-apps/cli version is bumped, re-copy the template and re-apply them.
 Unicode true
 ManifestDPIAware true
@@ -526,6 +526,12 @@ Function .onInit
   ${IfNot} ${Errors}
     StrCpy $UpdateMode 1
   ${EndIf}
+  ; Deskpad: always behave as an update. Without this, installing the same
+  ; version runs the previous uninstaller (the reinstall page that would ask is
+  ; skipped in passive mode, so its "uninstall" branch is taken), and that
+  ; uninstaller deletes the HKCU Run autostart entry. In update mode the old
+  ; files are simply overwritten and the Run entry is kept.
+  StrCpy $UpdateMode 1
 
   !if "${DISPLAYLANGUAGESELECTOR}" == "true"
     !insertmacro MUI_LANGDLL_DISPLAY
