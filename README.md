@@ -120,6 +120,13 @@ Writes are atomic (temp file + rename). A file that fails to parse is moved
 aside as `*.corrupt-<timestamp>` rather than overwritten, and the UI never
 saves the outline until it has successfully loaded it from disk.
 
+Deskpad refuses to start (with a message) when launched from inside a
+packaged (MSIX) app's sandbox, such as a terminal embedded in another app,
+because Windows would then redirect its data folder to that app's private
+cache and the notes you see would not be the ones the normally launched
+Deskpad uses. The installer has the same check. Start it from the Start menu
+or Explorer.
+
 ## Layout
 
 | Path | What |

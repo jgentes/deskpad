@@ -641,6 +641,59 @@ fn app_data_dir(identifier: &str) -> std::path::PathBuf {
         .join(identifier)
 }
 
+/// Deskpad is not a packaged (MSIX) app, but when it is started from inside a
+/// packaged app's process tree (a terminal embedded in such an app, or an
+/// installer run from one) Windows applies that package's file-system
+/// redirection to it: writes under `%APPDATA%` and `%LOCALAPPDATA%` land in
+/// `%LOCALAPPDATA%\Packages\<pkg>\LocalCache\{Roaming,Local}` and reads prefer
+/// that copy. Deskpad then works on a private fork of `tasks.json` that the
+/// normally launched app never sees; one such run made the outline appear to
+/// revert. The redirection is applied even when the process reports no
+/// package identity, so this detects it behaviourally: write a probe file
+/// into the data dir and look for it under every package's `LocalCache`.
+/// Returns the package folder name when redirected.
+#[cfg(windows)]
+fn hosting_package(dir: &std::path::Path) -> Option<String> {
+    use std::fs;
+    let local = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from)?;
+    let ident = dir.file_name()?.to_owned();
+    fs::create_dir_all(dir).ok()?;
+    let name = format!(".sandbox-probe-{}", std::process::id());
+    let probe = dir.join(&name);
+    fs::write(&probe, b"probe").ok()?;
+    let found = fs::read_dir(local.join("Packages"))
+        .ok()
+        .and_then(|rd| {
+            rd.flatten()
+                .find(|e| e.path().join("LocalCache").join("Roaming").join(&ident).join(&name).exists())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+        });
+    fs::remove_file(&probe).ok();
+    found
+}
+
+#[cfg(not(windows))]
+fn hosting_package(_dir: &std::path::Path) -> Option<String> {
+    None
+}
+
+/// Refuse to run with redirected app data (see `hosting_package`). Shows a
+/// native message box because no webview exists yet.
+fn refuse_if_sandboxed(dir: &std::path::Path) {
+    let Some(pkg) = hosting_package(dir) else { return };
+    let msg = format!(
+        "Deskpad was started from inside another app's sandbox:\n\n{pkg}\n\nWindows would redirect its data folder to that app's private cache, so your notes and settings would not be the ones the normally launched Deskpad uses.\n\nStart Deskpad from the Start menu or Explorer instead."
+    );
+    eprintln!("[startup] refusing to run under package {pkg}");
+    #[cfg(windows)]
+    unsafe {
+        use windows::core::HSTRING;
+        use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+        MessageBoxW(None, &HSTRING::from(msg.as_str()), &HSTRING::from("Deskpad"), MB_OK | MB_ICONERROR);
+    }
+    std::process::exit(2);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Load persistent state *before* the Builder runs: windows declared in
@@ -649,6 +702,7 @@ pub fn run() {
     // yet managed and every call fails, which once made the UI look wiped.
     let context = tauri::generate_context!();
     let dir = app_data_dir(&context.config().identifier);
+    refuse_if_sandboxed(&dir);
     let store = Store::load(dir.clone());
     let google = Google::load(&dir);
 

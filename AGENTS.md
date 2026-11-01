@@ -41,6 +41,43 @@ also be listed in `src-tauri/capabilities/default.json`.
   calls. `alert.html` exposes `window.__alertShow(meeting)` for the same reason.
 - Never send synthetic keyboard input to test the app; it lands in whatever
   window has focus. Synthetic mouse clicks on Deskpad's own window are fine.
+- **Never start Deskpad, `npm run tauri dev`, or the installer from a shell
+  that runs inside a packaged (MSIX) app**, such as the terminal embedded in
+  the Claude desktop app. See "Packaged-app sandboxes" below. To launch from
+  such a shell anyway, hand the exe to Explorer, which starts it outside the
+  sandbox: `explorer.exe "D:\path\to\Deskpad_x.y.z_x64-setup.exe"`. Both
+  the app and the installer refuse to run when they detect the sandbox.
+
+## Packaged-app sandboxes (why data once "reverted")
+
+A process that runs inside an MSIX-packaged app's process tree inherits that
+package's identity, and Windows then redirects its `%APPDATA%`,
+`%LOCALAPPDATA%` and Start Menu writes into
+`%LOCALAPPDATA%\Packages\<package>\LocalCache\{Roaming,Local}`. Reads fall
+through to the real folders until a file has been written there, after which
+the private copy wins. Deskpad is not packaged, so this only happens when it
+is launched from such a shell. The effects, all seen on 2026-10-31/11-01 after
+the installer was run from the Claude desktop app's terminal:
+
+- the installer put `deskpad.exe` and its uninstaller under
+  `...\LocalCache\Local\Deskpad\` while the real `%LOCALAPPDATA%\Deskpad`
+  stayed empty, and the Start Menu shortcut went to the redirected Start Menu;
+- the relaunched app read and wrote `...\LocalCache\Roaming\com.jgentes.deskpad\`,
+  a private fork of `tasks.json`, `archive.json` and `settings.json`;
+- its autostart code wrote the *real* HKCU Run entry (that key is not
+  redirected) pointing at the hidden exe, so the next sign-in launched that
+  exe outside the sandbox, which read the real, now stale, data folder: the
+  outline "reverted" to before the archive, and settings to older values.
+
+Guards, keep them: `refuse_if_sandboxed` in `lib.rs` runs before anything is
+loaded and exits with a message box, and the NSIS template's `.onInit` does
+the same check and aborts. Both detect the sandbox behaviourally (write a
+probe file, look for it under `Packages\*\LocalCache`), because a process in
+this state reports no package identity (`GetCurrentPackageFullName` returns
+APPMODEL_ERROR_NO_PACKAGE) even though its writes are redirected. If
+you ever need to inspect the real folders from a sandboxed shell, a UNC path
+(`\\localhost\C$\Users\<user>\AppData\...`) bypasses the redirection, and
+`Invoke-CimMethod -ClassName StdRegProv` reads the real registry.
 
 ## Data safety rules (keep these intact)
 
@@ -78,7 +115,11 @@ no "create desktop shortcut" or "launch app" checkboxes, no "app is running"
 dialog. It closes a running Deskpad, copies the new build, and relaunches it.
 
 This is done with `bundle.windows.nsis.template = "nsis/installer.nsi"`, a
-copy of Tauri's stock template with three changes, all marked `; Deskpad:`:
+copy of Tauri's stock template with four changes, all marked `; Deskpad:`:
+
+- `.onInit` first probes for app-data redirection and aborts with a message
+  box when the installer runs inside a packaged app's sandbox (see
+  "Packaged-app sandboxes" above).
 
 - `.onInit` unconditionally sets `$PassiveMode 1` (the stock template only
   does this for the `/P` flag). Passive mode skips every page via
@@ -105,7 +146,7 @@ shell drops the stale strip silently. Keep both when touching docking.
 
 **When bumping `@tauri-apps/cli`**, re-copy the template from the matching tag
 (`crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi` at
-`tauri-cli-v<version>`), re-apply the three marked changes, and keep the header
+`tauri-cli-v<version>`), re-apply the four marked changes, and keep the header
 comment current. Then build and run the installer against a running Deskpad
 and confirm: it exits within a few seconds, the only window is the progress
 page, the old process is gone, a new one is running, and the `Deskpad` value

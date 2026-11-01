@@ -1,6 +1,6 @@
 ; Deskpad installer template. Copied verbatim from tauri-apps/tauri tag
 ; tauri-cli-v2.12.4 (crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi)
-; with three changes marked "Deskpad:" (two in .onInit, one in .onInstSuccess). When the
+; with four changes marked "Deskpad:" (three in .onInit, one in .onInstSuccess). When the
 ; @tauri-apps/cli version is bumped, re-copy the template and re-apply them.
 Unicode true
 ManifestDPIAware true
@@ -512,6 +512,35 @@ LangString choowHowToInstall 0 ""
 {{/each}}
 
 Function .onInit
+  ; Deskpad: refuse to run from inside a packaged (MSIX) app's sandbox, e.g. a
+  ; terminal embedded in such an app. There, %LOCALAPPDATA%, %APPDATA% and the
+  ; Start Menu are redirected into that package's LocalCache: the exe,
+  ; shortcut and the app's data all land in a private copy that a normally
+  ; launched Deskpad never sees, and the autostart entry then points at that
+  ; hidden exe. The process reports no package identity in that state, so
+  ; detect it by writing a probe file and looking for it under LocalCache.
+  ClearErrors
+  FileOpen $0 "$LOCALAPPDATA\deskpad-sandbox-probe.tmp" w
+  ${IfNot} ${Errors}
+    FileWrite $0 "probe"
+    FileClose $0
+    FindFirst $1 $2 "$LOCALAPPDATA\Packages\*"
+    ${Do}
+      ${If} $2 == ""
+        ${Break}
+      ${EndIf}
+      ${If} ${FileExists} "$LOCALAPPDATA\Packages\$2\LocalCache\Local\deskpad-sandbox-probe.tmp"
+        FindClose $1
+        Delete "$LOCALAPPDATA\deskpad-sandbox-probe.tmp"
+        MessageBox MB_ICONSTOP|MB_OK "This installer was started from inside another app's sandbox ($2), where Windows would install Deskpad into a hidden per-app folder and give it a private copy of your notes.$\r$\n$\r$\nRun it from Explorer or a normal terminal instead."
+        Abort
+      ${EndIf}
+      FindNext $1 $2
+    ${Loop}
+    FindClose $1
+    Delete "$LOCALAPPDATA\deskpad-sandbox-probe.tmp"
+  ${EndIf}
+
   ; Deskpad: always install passively (one click). This skips every wizard
   ; page, closes a running Deskpad without asking, and never offers desktop
   ; shortcut / launch checkboxes. Equivalent to launching with /P.
